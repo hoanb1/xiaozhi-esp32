@@ -20,9 +20,14 @@
 #include "wifi_board.h"
 #include "mcp_server.h"
 #include "config.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "esp_lcd_ili9341.h"
 #include <hal/adc_types.h>
+#include <driver/i2c.h>
+
+
 
 #define TAG "FreenoveESP32S3Display"
 
@@ -34,10 +39,111 @@ private:
     Button boot_button_;
     LcdDisplay *display_;
     i2c_master_bus_handle_t codec_i2c_bus_;
+    i2c_master_dev_handle_t touch_dev_handle_ = nullptr;
+    TaskHandle_t touch_task_handle_ = nullptr;
+    bool touch_initialized_ = false;
 
     int last_battery_level_ = 0;
     int last_voltage_mv_ = 0;
     bool last_charging_state_ = false;
+
+    bool ReadTouchRegister(uint8_t reg, uint8_t *data, size_t len) {
+        if (!touch_initialized_ && reg != FT6336_FIRMWARE_ID) return false;
+        
+        esp_err_t ret = i2c_master_transmit_receive(
+            touch_dev_handle_,
+            &reg, 1,
+            data, len,
+            -1
+        );
+        return ret == ESP_OK;
+    }
+
+    bool WriteTouchRegister(uint8_t reg, uint8_t value) {
+        uint8_t write_buf[2] = {reg, value};
+        esp_err_t ret = i2c_master_transmit(
+            touch_dev_handle_,
+            write_buf, 2,
+            -1
+        );
+        return ret == ESP_OK;
+    }
+
+    bool ReadTouchPoint(uint16_t &x, uint16_t &y) {
+        uint8_t touch_count = 0;
+        if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) {
+            return false;
+        }
+
+        touch_count &= 0x0F; // Get number of touch points
+        if (touch_count == 0 || touch_count > 2) {
+            return false;
+        }
+
+        uint8_t data[4];
+        if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) {
+            return false;
+        }
+
+        // FT6336 coordinates: X is 12-bit (XH[3:0] << 8 | XL), Y is 12-bit (YH[3:0] << 8 | YL)
+        x = ((data[0] & 0x0F) << 8) | data[1];
+        y = ((data[2] & 0x0F) << 8) | data[3];
+
+        return true;
+    }
+
+    void InitializeTouch() {
+        i2c_device_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = FT6336_ADDR,
+            .scl_speed_hz = 400000,
+        };
+
+        if (i2c_master_bus_add_device(codec_i2c_bus_, &dev_cfg, &touch_dev_handle_) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add touch device to I2C bus");
+            return;
+        }
+
+        // Read device ID to verify communication first
+        uint8_t chip_id;
+        if (ReadTouchRegister(FT6336_FIRMWARE_ID, &chip_id, 1)) {
+            ESP_LOGI(TAG, "Touch controller found. Chip ID: 0x%02X", chip_id);
+            touch_initialized_ = true;
+        } else {
+            ESP_LOGE(TAG, "Failed to communicate with FT6336");
+            return;
+        }
+
+        // Configure touch
+        WriteTouchRegister(FT6336_CTRL, 0x00);      // Normal mode
+        WriteTouchRegister(FT6336_THRESHOLD, 0x14); // Lower threshold for better sensitivity
+    }
+
+    void TouchTask(void *arg) {
+        uint32_t last_touch_time = 0;
+        const uint32_t debounce_time = 500; // ms: Tránh việc toggle quá nhanh
+        bool was_touched = false;
+
+        while (true) {
+            uint16_t x, y;
+            if (ReadTouchPoint(x, y)) {
+                if (!was_touched) {
+                uint32_t now = esp_log_timestamp();
+                if ((now - last_touch_time) > debounce_time) {
+                        ESP_LOGI(TAG, "Touch detected! Toggle chat state.");
+                    auto &app = Application::GetInstance();
+                    app.ToggleChatState();
+                    
+                    last_touch_time = now;
+                }
+                    was_touched = true;
+            }
+            } else {
+                was_touched = false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50)); // Poll every 50ms
+        }
+    }
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -120,7 +226,27 @@ public:
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
+        InitializeTouch();
+
+        xTaskCreate(
+            [](void *arg) { static_cast<FreenoveESP32S3Display*>(arg)->TouchTask(arg); },
+            "touch_task",
+            4096,
+            this,
+            5,
+            &touch_task_handle_
+        );
+        
         GetBacklight()->SetBrightness(100);
+    }
+    
+    ~FreenoveESP32S3Display() {
+        if (touch_task_handle_ != nullptr) {
+            vTaskDelete(touch_task_handle_);
+        }
+        if (touch_dev_handle_ != nullptr) {
+            i2c_master_bus_rm_device(touch_dev_handle_);
+        }
     }
 
     virtual Led *GetLed() override {
@@ -185,11 +311,6 @@ public:
                 }
 
                 int real_voltage_mv = voltage_mv * 2;
-
-                // LOGIC CẢI TIẾN:
-                // 1. Nếu cắm USB, điện áp tại pin sẽ rất ổn định hoặc tăng nhẹ.
-                // 2. Dùng một ngưỡng Volt cao hơn (vd: 4185mV) để làm căn cứ charging khi USB cắm vào.
-                // 3. Sử dụng mức delta lớn hơn để tránh báo sạc nhầm khi rút điện.
 
                 if (real_voltage_mv > 4185) {
                     last_charging_state_ = true;
