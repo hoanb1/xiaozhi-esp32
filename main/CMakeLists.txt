@@ -23,6 +23,7 @@ set(SOURCES "audio_codecs/audio_codec.cc"
             "settings.cc"
             "background_task.cc"
             "main.cc"
+            "font_viet_16.c"
             )
 
 set(INCLUDE_DIRS "." "display" "audio_codecs" "protocols" "audio_processing")
@@ -182,7 +183,7 @@ elseif(CONFIG_BOARD_TYPE_Freenove_Media_Kit_3_5_LCD)
 elseif(CONFIG_BOARD_TYPE_Freenove_ESP32S3_DISPLAY_2_8_LCD)
     set(BOARD_TYPE "freenove-esp32s3-display-2.8-lcd")
 elseif(CONFIG_BOARD_TYPE_ESP32_CGC_144)
-    set(BOARD_TYPE "esp32-cgc-144")  
+    set(BOARD_TYPE "esp32-cgc-144")
 elseif(CONFIG_BOARD_TYPE_ESP_S3_LCD_EV_Board)
     set(BOARD_TYPE "esp-s3-lcd-ev-board")
 elseif(CONFIG_BOARD_TYPE_ZHENGCHEN_1_54TFT_WIFI)
@@ -228,6 +229,8 @@ elseif(CONFIG_LANGUAGE_ZH_TW)
     set(LANG_DIR "zh-TW")
 elseif(CONFIG_LANGUAGE_EN_US)
     set(LANG_DIR "en-US")
+elseif(CONFIG_LANGUAGE_VI_VN)
+    set(LANG_DIR "vi-VN")
 elseif(CONFIG_LANGUAGE_JA_JP)
     set(LANG_DIR "ja-JP")
 endif()
@@ -298,7 +301,7 @@ list(APPEND FILES_TO_DOWNLOAD "panic_return.aaf" "wake.aaf")
 foreach(FILENAME IN LISTS FILES_TO_DOWNLOAD)
     set(REMOTE_FILE "${URL}/${FILENAME}")
     set(LOCAL_FILE "${SPIFFS_DIR}/${FILENAME}")
-    
+
     # 检查本地文件是否存在
     if(EXISTS ${LOCAL_FILE})
         message(STATUS "File ${FILENAME} already exists, skipping download")

@@ -1,3 +1,5 @@
+// path: main/boards/freenove-esp32s3-display-2.8-lcd/freenove_esp32s3_display_board.cc
+
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
@@ -8,8 +10,6 @@
 #include "application.h"
 #include "audio_codecs/no_audio_codec.h"
 #include "audio_codecs/es8311_audio_codec.h"
-// #include "codecs/no_audio_codec.h"
-// #include "codecs/es8311_audio_codec.h"
 #include "button.h"
 #include "display/lcd_display.h"
 #include "led/single_led.h"
@@ -22,7 +22,7 @@
 
 #define TAG "FreenoveESP32S3Display"
 
-LV_FONT_DECLARE(font_puhui_16_4);
+LV_FONT_DECLARE(font_viet_16);
 LV_FONT_DECLARE(font_awesome_16_4);
 
 class FreenoveESP32S3Display : public WifiBoard {
@@ -45,7 +45,7 @@ class FreenoveESP32S3Display : public WifiBoard {
   void InitializeLcdDisplay() {
     esp_lcd_panel_io_handle_t panel_io = nullptr;
     esp_lcd_panel_handle_t panel = nullptr;
-    // 液晶屏控制IO初始化
+
     ESP_LOGD(TAG, "Install panel IO");
     esp_lcd_panel_io_spi_config_t io_config = {};
     io_config.cs_gpio_num = DISPLAY_CS_PIN;
@@ -56,8 +56,7 @@ class FreenoveESP32S3Display : public WifiBoard {
     io_config.lcd_cmd_bits = 8;
     io_config.lcd_param_bits = 8;
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(LCD_SPI_HOST, &io_config, &panel_io));
-    
-    // 初始化液晶屏驱动芯片
+
     ESP_LOGD(TAG, "Install LCD driver");
     esp_lcd_panel_dev_config_t panel_config = {};
     panel_config.reset_gpio_num = DISPLAY_RST_PIN;
@@ -71,11 +70,12 @@ class FreenoveESP32S3Display : public WifiBoard {
     esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
     esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
     esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-    display_ = new SpiLcdDisplay(panel_io, panel, 
+
+    display_ = new SpiLcdDisplay(panel_io, panel,
         DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, 
         DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
         {
-            .text_font = &font_puhui_16_4,
+            .text_font = &font_viet_16,
             .icon_font = &font_awesome_16_4,
             .emoji_font = DISPLAY_HEIGHT >= 240 ? font_emoji_64_init() : font_emoji_32_init(),
         });
@@ -128,6 +128,8 @@ class FreenoveESP32S3Display : public WifiBoard {
       AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK,
       AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN,
       AUDIO_CODEC_ES8311_ADDR, true, true);
+
+   // audio_codec.SetOutputVolume(90);
     return &audio_codec;
   }
 
