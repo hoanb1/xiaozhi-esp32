@@ -51,6 +51,9 @@
         "LOADING_ASSETS": "Đang tải tài nguyên...",
         "PLEASE_WAIT": "Vui lòng đợi...",
         "FOUND_NEW_ASSETS": "Tìm thấy tài nguyên mới: %s",
-        "HELLO_MY_FRIEND": "Xin chào, bạn của tôi!"
+        "HELLO_MY_FRIEND": "Xin chào, bạn của tôi!",
+        "HEARING_AID": "Máy trợ thính",
+        "HEARING_AID_ON": "Chế độ trợ thính: BẬT",
+        "HEARING_AID_OFF": "Chế độ trợ thính: TẮT"
     }
 }

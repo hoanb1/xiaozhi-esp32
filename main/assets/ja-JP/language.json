@@ -53,6 +53,9 @@
         "MAX_VOLUME": "最大音量",
 
         "RTC_MODE_OFF": "AEC 無効",
-        "RTC_MODE_ON": "AEC 有効"
+        "RTC_MODE_ON": "AEC 有効",
+        "HEARING_AID": "Hearing Aid",
+        "HEARING_AID_ON": "Hearing Aid: ON",
+        "HEARING_AID_OFF": "Hearing Aid: OFF"
     }
 }

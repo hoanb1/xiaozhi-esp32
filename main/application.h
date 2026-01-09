@@ -81,6 +81,7 @@ public:
     void SendMcpMessage(const std::string& payload);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
+    void SetSttOnlyMode(bool enable) ;
     BackgroundTask* GetBackgroundTask() const { return background_task_; }
 
 private:
@@ -103,6 +104,7 @@ private:
     bool aborted_ = false;
     bool voice_detected_ = false;
     bool busy_decoding_audio_ = false;
+    bool stt_only_mode_ = false;  // STT (Speech-to-Text) only mode flag
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
 

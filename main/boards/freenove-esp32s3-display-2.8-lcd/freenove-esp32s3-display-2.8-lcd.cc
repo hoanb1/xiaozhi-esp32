@@ -46,6 +46,7 @@ private:
     int last_battery_level_ = 0;
     int last_voltage_mv_ = 0;
     bool last_charging_state_ = false;
+    bool stt_only_active_ = false; // Trạng thái chế độ STT Only
 
     bool ReadTouchRegister(uint8_t reg, uint8_t *data, size_t len) {
         if (!touch_initialized_ && reg != FT6336_FIRMWARE_ID) return false;
@@ -85,7 +86,6 @@ private:
             return false;
         }
 
-        // FT6336 coordinates: X is 12-bit (XH[3:0] << 8 | XL), Y is 12-bit (YH[3:0] << 8 | YL)
         x = ((data[0] & 0x0F) << 8) | data[1];
         y = ((data[2] & 0x0F) << 8) | data[3];
 
@@ -104,7 +104,6 @@ private:
             return;
         }
 
-        // Read device ID to verify communication first
         uint8_t chip_id;
         if (ReadTouchRegister(FT6336_FIRMWARE_ID, &chip_id, 1)) {
             ESP_LOGI(TAG, "Touch controller found. Chip ID: 0x%02X", chip_id);
@@ -114,14 +113,13 @@ private:
             return;
         }
 
-        // Configure touch
-        WriteTouchRegister(FT6336_CTRL, 0x00);      // Normal mode
-        WriteTouchRegister(FT6336_THRESHOLD, 0x14); // Lower threshold for better sensitivity
+        WriteTouchRegister(FT6336_CTRL, 0x00);
+        WriteTouchRegister(FT6336_THRESHOLD, 0x14);
     }
 
     void TouchTask(void *arg) {
         uint32_t last_touch_time = 0;
-        const uint32_t debounce_time = 500; // ms: Tránh việc toggle quá nhanh
+        const uint32_t debounce_time = 500;
         bool was_touched = false;
 
         while (true) {
@@ -141,7 +139,7 @@ private:
             } else {
                 was_touched = false;
             }
-            vTaskDelay(pdMS_TO_TICKS(50)); // Poll every 50ms
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
 
@@ -210,12 +208,32 @@ private:
     }
 
     void InitializeButtons() {
+        // BẤM NHANH (CLICK): Luôn thực hiện ToggleChatState
         boot_button_.OnClick([this]() {
             auto &app = Application::GetInstance();
+
             if (app.GetDeviceState() == kDeviceStateStarting &&
                 !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
+                return;
             }
+
+            ESP_LOGI(TAG, "Boot button clicked. Toggling chat state...");
+            app.ToggleChatState();
+        });
+
+        // NHẤN GIỮ (LONG PRESS): Chuyển chế độ VÀ bắt đầu nghe luôn
+        boot_button_.OnLongPress([this]() {
+            auto &app = Application::GetInstance();
+
+            stt_only_active_ = !stt_only_active_;
+            ESP_LOGI(TAG, "STT Only Mode toggled: %s. Activating listening session.", stt_only_active_ ? "ON" : "OFF");
+
+            // 1. Cập nhật mode (đổi màu UI, cài đặt cờ stt_only_mode_)
+            app.SetSttOnlyMode(stt_only_active_);
+
+            // 2. Kích hoạt chế độ nghe ngay lập tức
+            // Nếu đang Idle, nó sẽ bắt đầu nghe. Nếu đang nói, nó sẽ ngắt lời và nghe.
             app.ToggleChatState();
         });
     }
@@ -326,9 +344,6 @@ public:
 
                 last_battery_level_ = level;
                 last_voltage_mv_ = real_voltage_mv;
-
-                ESP_LOGI(TAG, "Battery: %d%% (%dmV), Charging: %s",
-                         level, real_voltage_mv, last_charging_state_ ? "YES" : "NO");
             }
 
             if (cali_enabled) adc_cali_delete_scheme_curve_fitting(cali_handle);

@@ -54,6 +54,9 @@
         "MAX_VOLUME": "Max volume",
 
         "RTC_MODE_OFF": "AEC Off",
-        "RTC_MODE_ON": "AEC On"
+        "RTC_MODE_ON": "AEC On",
+        "HEARING_AID": "Hearing Aid",
+        "HEARING_AID_ON": "Hearing Aid: ON",
+        "HEARING_AID_OFF": "Hearing Aid: OFF"
     }
 }

@@ -12,8 +12,11 @@
 #include "settings.h"
 
 #include "board.h"
+#include "application.h"
 
 #define TAG "LcdDisplay"
+// Màu xanh mòng két sáng, tạo sự khác biệt rõ rệt nhưng không bị quá tối
+#define STT_MODE_BG_COLOR lv_color_hex(0x006666)
 
 // Color definitions for dark theme
 #define DARK_BACKGROUND_COLOR       lv_color_hex(0x121212)     // Dark background
@@ -328,7 +331,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_radius(status_bar_, 0, 0);
     lv_obj_set_style_bg_color(status_bar_, current_theme_.background, 0);
     lv_obj_set_style_text_color(status_bar_, current_theme_.text, 0);
-    
+
     /* Content - Chat area */
     content_ = lv_obj_create(container_);
     lv_obj_set_style_radius(content_, 0, 0);
@@ -341,7 +344,7 @@ void LcdDisplay::SetupUI() {
     // Enable scrolling for chat content
     lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(content_, LV_DIR_VER);
-    
+
     // Create a flex container for chat messages
     lv_obj_set_flex_flow(content_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -385,7 +388,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(status_label_, current_theme_.text, 0);
     lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
-    
+
     mute_label_ = lv_label_create(status_bar_);
     lv_label_set_text(mute_label_, "");
     lv_obj_set_style_text_font(mute_label_, fonts_.icon_font, 0);
@@ -455,7 +458,7 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
                 // 检查气泡类型是否为系统消息
                 void* bubble_type_ptr = lv_obj_get_user_data(last_bubble);
                 if (bubble_type_ptr != nullptr && strcmp((const char*)bubble_type_ptr, "system") == 0) {
-                    // 如果最后一个消息也是系统消息，则删除它
+                    // Nếu cuối cùng cũng là tin nhắn hệ thống thì xóa cái cũ đi
                     lv_obj_del(last_container);
                 }
             }
@@ -466,8 +469,15 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_obj_t* msg_bubble = lv_obj_create(content_);
     lv_obj_set_style_radius(msg_bubble, 8, 0);
     lv_obj_set_scrollbar_mode(msg_bubble, LV_SCROLLBAR_MODE_OFF);
+
+    // THAY ĐỔI: Không hiển thị viền nếu đang ở chế độ STT Only
+    if (stt_mode_active_) {
+        lv_obj_set_style_border_width(msg_bubble, 0, 0);
+    } else {
     lv_obj_set_style_border_width(msg_bubble, 1, 0);
     lv_obj_set_style_border_color(msg_bubble, current_theme_.border, 0);
+    }
+
     lv_obj_set_style_pad_all(msg_bubble, 8, 0);
 
     // Create the message text
@@ -614,8 +624,15 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
         lv_obj_t* img_bubble = lv_obj_create(content_);
         lv_obj_set_style_radius(img_bubble, 8, 0);
         lv_obj_set_scrollbar_mode(img_bubble, LV_SCROLLBAR_MODE_OFF);
+
+        // THAY ĐỔI: Không hiển thị viền nếu đang ở chế độ STT Only
+        if (stt_mode_active_) {
+            lv_obj_set_style_border_width(img_bubble, 0, 0);
+        } else {
         lv_obj_set_style_border_width(img_bubble, 1, 0);
         lv_obj_set_style_border_color(img_bubble, current_theme_.border, 0);
+        }
+
         lv_obj_set_style_pad_all(img_bubble, 8, 0);
         
         // Set image bubble background color (similar to system message)
@@ -835,6 +852,41 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
     }
 }
 #endif
+
+void LcdDisplay::SetStatus(const char* status) {
+    DisplayLockGuard lock(this);
+    if (status_label_ == nullptr) return;
+
+    lv_label_set_text(status_label_, status);
+
+    // Kiểm tra đa ngôn ngữ để đổi màu chữ Status
+    if (status != nullptr && Lang::Strings::HEARING_AID != nullptr &&
+        strcmp(status, Lang::Strings::HEARING_AID) == 0) {
+        lv_obj_set_style_text_color(status_label_, lv_color_hex(0x00FF00), 0);
+        } else {
+            lv_obj_set_style_text_color(status_label_, current_theme_.text, 0);
+        }
+}
+
+void LcdDisplay::SetSttMode(bool enable) {
+    DisplayLockGuard lock(this);
+    stt_mode_active_ = enable;
+
+    if (enable) {
+        // Chỉ đổi màu nền nội dung
+        if (content_ != nullptr) {
+            lv_obj_set_style_bg_color(content_, STT_MODE_BG_COLOR, 0);
+            lv_obj_set_style_border_width(content_, 0, 0);
+        }
+    } else {
+        // Quay về màu nền nội dung của Theme hiện tại
+        if (content_ != nullptr) {
+            lv_obj_set_style_bg_color(content_, current_theme_.chat_background, 0);
+            lv_obj_set_style_border_width(content_, 1, 0);
+            lv_obj_set_style_border_color(content_, current_theme_.border, 0);
+        }
+    }
+}
 
 void LcdDisplay::SetEmotion(const char* emotion) {
     struct Emotion {

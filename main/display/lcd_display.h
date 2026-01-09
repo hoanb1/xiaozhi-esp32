@@ -37,6 +37,7 @@ protected:
 
     DisplayFonts fonts_;
     ThemeColors current_theme_;
+    bool stt_mode_active_ = false;  // Tracks if STT (Speech-to-Text) mode is active
 
     void SetupUI();
     virtual bool Lock(int timeout_ms = 0) override;
@@ -51,12 +52,16 @@ public:
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetIcon(const char* icon) override;
     virtual void SetPreviewImage(const lv_img_dsc_t* img_dsc) override;
+    virtual void SetStatus(const char* status) override;
 #if CONFIG_USE_WECHAT_MESSAGE_STYLE
     virtual void SetChatMessage(const char* role, const char* content) override; 
 #endif  
 
     // Add theme switching function
     virtual void SetTheme(const std::string& theme_name) override;
+    
+    // Set STT (Speech-to-Text) mode
+    void SetSttMode(bool enable) override;
 };
 
 // RGB LCD显示器
