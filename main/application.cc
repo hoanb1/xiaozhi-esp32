@@ -635,6 +635,7 @@ void Application::Start() {
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
 
     /* Wait for the network to be ready */
+    display->SetStatus(Lang::Strings::CONNECTING);
     board.StartNetwork();
 
     // Update the status bar immediately to show the network state
