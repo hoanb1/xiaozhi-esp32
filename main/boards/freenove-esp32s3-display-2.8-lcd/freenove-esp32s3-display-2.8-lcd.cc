@@ -20,6 +20,7 @@
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <esp_lvgl_port.h>
 
 #include "esp_lcd_ili9341.h"
 #include <hal/adc_types.h>
@@ -37,59 +38,57 @@ private:
     LcdDisplay *display_;
     i2c_master_bus_handle_t codec_i2c_bus_;
     i2c_master_dev_handle_t touch_dev_handle_ = nullptr;
-    TaskHandle_t touch_task_handle_ = nullptr;
     bool touch_initialized_ = false;
 
     int last_battery_level_ = 0;
     int last_voltage_mv_ = 0;
     bool last_charging_state_ = false;
-    bool stt_only_active_ = false; // Trạng thái chế độ STT Only
+    bool stt_only_active_ = false;
 
     bool ReadTouchRegister(uint8_t reg, uint8_t *data, size_t len) {
         if (!touch_initialized_ && reg != FT6336_FIRMWARE_ID) return false;
-
-        esp_err_t ret = i2c_master_transmit_receive(
-            touch_dev_handle_,
-            &reg, 1,
-            data, len,
-            -1
-        );
+        esp_err_t ret = i2c_master_transmit_receive(touch_dev_handle_, &reg, 1, data, len, -1);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "I2C read failed at reg 0x%02X: %s", reg, esp_err_to_name(ret));
+        }
         return ret == ESP_OK;
     }
 
     bool WriteTouchRegister(uint8_t reg, uint8_t value) {
         uint8_t write_buf[2] = {reg, value};
-        esp_err_t ret = i2c_master_transmit(
-            touch_dev_handle_,
-            write_buf, 2,
-            -1
-        );
+        esp_err_t ret = i2c_master_transmit(touch_dev_handle_, write_buf, 2, -1);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "I2C write failed at reg 0x%02X: %s", reg, esp_err_to_name(ret));
+        }
         return ret == ESP_OK;
     }
 
+    // --- XỬ LÝ TỌA ĐỘ VÀ HƯỚNG VUỐT ---
     bool ReadTouchPoint(uint16_t &x, uint16_t &y) {
         uint8_t touch_count = 0;
-        if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) {
-            return false;
-        }
-
-        touch_count &= 0x0F; // Get number of touch points
-        if (touch_count == 0 || touch_count > 2) {
-            return false;
-        }
+        if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) return false;
+        touch_count &= 0x0F;
+        if (touch_count == 0 || touch_count > 2) return false;
 
         uint8_t data[4];
-        if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) {
-            return false;
-        }
+        if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) return false;
 
-        x = ((data[0] & 0x0F) << 8) | data[1];
-        y = ((data[2] & 0x0F) << 8) | data[3];
+        // Tọa độ thô từ chip (Portrait)
+        uint16_t raw_x = ((data[0] & 0x0F) << 8) | data[1];
+        uint16_t raw_y = ((data[2] & 0x0F) << 8) | data[3];
 
+        // ĐỂ KHỚP HƯỚNG VUỐT (SCROLL) VỚI HIỂN THỊ NGANG:
+        // Màn hình ILI9341 xoay ngang (320x240) yêu cầu:
+        x = raw_y;           // Swap trục dài (Y) sang X của màn hình
+        y = 240 - raw_x;     // Invert và Swap trục ngắn (X) sang Y của màn hình
+
+        // Log mức độ Debug thấp để tránh tràn màn hình, chỉ bật khi cần check tọa độ chính xác
+         ESP_LOGD(TAG, "Touch Point: x=%d, y=%d", x, y);
         return true;
     }
 
     void InitializeTouch() {
+        ESP_LOGI(TAG, "Initializing FT6336 touch controller...");
         i2c_device_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = FT6336_ADDR,
@@ -97,7 +96,7 @@ private:
         };
 
         if (i2c_master_bus_add_device(codec_i2c_bus_, &dev_cfg, &touch_dev_handle_) != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to add touch device to I2C bus");
+            ESP_LOGE(TAG, "Failed to add touch device");
             return;
         }
 
@@ -106,43 +105,36 @@ private:
             ESP_LOGI(TAG, "Touch controller found. Chip ID: 0x%02X", chip_id);
             touch_initialized_ = true;
         } else {
-            ESP_LOGE(TAG, "Failed to communicate with FT6336");
-            return;
+            ESP_LOGE(TAG, "Touch controller not found at 0x%02X", FT6336_ADDR);
         }
 
         WriteTouchRegister(FT6336_CTRL, 0x00);
         WriteTouchRegister(FT6336_THRESHOLD, 0x14);
     }
 
-    void TouchTask(void *arg) {
-        uint32_t last_touch_time = 0;
-        const uint32_t debounce_time = 500;
-        bool was_touched = false;
+    static void LvglTouchCb(lv_indev_t *indev, lv_indev_data_t *data) {
+        FreenoveESP32S3Display *self = (FreenoveESP32S3Display *) lv_indev_get_user_data(indev);
+        uint16_t x, y;
+        if (self && self->ReadTouchPoint(x, y)) {
+            data->point.x = (lv_coord_t) x;
+            data->point.y = (lv_coord_t) y;
+            data->state = LV_INDEV_STATE_PRESSED;
+        } else {
+            data->state = LV_INDEV_STATE_RELEASED;
+        }
+    }
 
-        while (true) {
-            uint16_t x, y;
-            if (ReadTouchPoint(x, y)) {
-                if (!was_touched) {
-                    uint32_t now = esp_log_timestamp();
-                    if ((now - last_touch_time) > debounce_time) {
-                        ESP_LOGI(TAG, "Touch detected! Toggle chat state.");
-                        auto &app = Application::GetInstance();
-                        // Nếu đang STT Mode thì không dùng cảm ứng để toggle tránh loạn
-                        if (!stt_only_active_) {
-                            app.ToggleChatState();
-                        }
-                        last_touch_time = now;
-                    }
-                    was_touched = true;
-                }
-            } else {
-                was_touched = false;
-            }
-            vTaskDelay(pdMS_TO_TICKS(50));
+    static void OnDisplayClicked(lv_event_t *e) {
+        lv_event_code_t code = lv_event_get_code(e);
+        // Sử dụng CLICKED thay vì SHORT_CLICKED để tăng độ nhạy khi chạm
+        if(code == LV_EVENT_CLICKED) {
+            ESP_LOGI(TAG, "Display Clicked -> Toggle Chat");
+            Application::GetInstance().ToggleChatState();
         }
     }
 
     void InitializeSpi() {
+        ESP_LOGI(TAG, "Initializing SPI bus for LCD...");
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
         buscfg.miso_io_num = DISPLAY_MIS0_PIN;
@@ -154,6 +146,7 @@ private:
     }
 
     void InitializeLcdDisplay() {
+        ESP_LOGI(TAG, "Creating ILI9341 LCD panel...");
         esp_lcd_panel_io_handle_t panel_io = nullptr;
         esp_lcd_panel_handle_t panel = nullptr;
 
@@ -193,6 +186,7 @@ private:
     }
 
     void InitializeI2c() {
+        ESP_LOGI(TAG, "Initializing I2C master bus...");
         i2c_master_bus_config_t i2c_bus_cfg = {
             .i2c_port = AUDIO_CODEC_I2C_NUM,
             .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
@@ -207,31 +201,28 @@ private:
     }
 
     void InitializeButtons() {
-        // 1. Nhấn đơn (Single Click): Toggle Chat/Idle
         boot_button_.OnClick([this]() {
             auto &app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting &&
                 !WifiStation::GetInstance().IsConnected()) {
+                ESP_LOGI(TAG, "Starting state and no WiFi: Resetting configuration");
                 ResetWifiConfiguration();
                 return;
             }
-            ESP_LOGI(TAG, "Single Click: Toggle chat state");
+            ESP_LOGI(TAG, "Boot button Click: Toggle chat state");
             app.ToggleChatState();
         });
 
-        // 2. Nhấn giữ (Long Press): Chuyển chế độ STT Only
         boot_button_.OnLongPress([this]() {
             auto &app = Application::GetInstance();
             stt_only_active_ = !stt_only_active_;
-            ESP_LOGI(TAG, "Long Press: STT Only Mode %s", stt_only_active_ ? "ON" : "OFF");
+            ESP_LOGI(TAG, "Boot button LongPress: STT Only Mode %s", stt_only_active_ ? "ON" : "OFF");
             app.SetSttOnlyMode(stt_only_active_);
         });
 
-        // 3. Nhấn đúp (Double Click): Test Mic
-        // Lưu ý: Nếu báo lỗi 'OnDoubleClick' không tồn tại, hãy dùng Cách 2 bên dưới
         boot_button_.OnDoubleClick([this]() {
             auto &app = Application::GetInstance();
-            ESP_LOGI(TAG, "Double Click: Toggle Audio Testing");
+            ESP_LOGI(TAG, "Boot button DoubleClick: Toggle Audio Testing");
 
             if (app.GetDeviceState() == kDeviceStateAudioTesting) {
                 app.ExitAudioTestingMode();
@@ -245,26 +236,34 @@ public:
     FreenoveESP32S3Display() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
         InitializeSpi();
+        InitializeTouch();
         InitializeLcdDisplay();
         InitializeButtons();
-        InitializeTouch();
 
-        xTaskCreate(
-            [](void *arg) { static_cast<FreenoveESP32S3Display *>(arg)->TouchTask(arg); },
-            "touch_task",
-            4096,
-            this,
-            5,
-            &touch_task_handle_
-        );
+        if (touch_initialized_) {
+            lvgl_port_lock(0);
+
+            lv_indev_t *indev = lv_indev_create();
+            lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+            lv_indev_set_read_cb(indev, LvglTouchCb);
+            lv_indev_set_user_data(indev, this);
+
+            // Đăng ký sự kiện chạm vào màn hình
+            // Quan trọng: Gán trực tiếp vào màn hình đang hoạt động (active screen)
+            lv_obj_t* screen = lv_scr_act();
+            lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(screen, OnDisplayClicked, LV_EVENT_CLICKED, nullptr);
+
+            lvgl_port_unlock();
+            ESP_LOGI(TAG, "LVGL Input device and Click events initialized");
+        } else {
+            ESP_LOGW(TAG, "Touch not functional, skipping LVGL indev registration");
+        }
 
         GetBacklight()->SetBrightness(100);
     }
 
     ~FreenoveESP32S3Display() {
-        if (touch_task_handle_ != nullptr) {
-            vTaskDelete(touch_task_handle_);
-        }
         if (touch_dev_handle_ != nullptr) {
             i2c_master_bus_rm_device(touch_dev_handle_);
         }
@@ -347,6 +346,7 @@ public:
 
                 last_battery_level_ = level;
                 last_voltage_mv_ = real_voltage_mv;
+                ESP_LOGD(TAG, "Battery level updated: %d%% (%dmV)", level, real_voltage_mv);
             }
 
             if (cali_enabled) adc_cali_delete_scheme_curve_fitting(cali_handle);

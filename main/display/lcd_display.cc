@@ -15,7 +15,7 @@
 #include "application.h"
 
 #define TAG "LcdDisplay"
-// Màu xanh mòng két sáng, tạo sự khác biệt rõ rệt nhưng không bị quá tối
+// Teal green color, distinct but not too dark
 #define STT_MODE_BG_COLOR lv_color_hex(0x006666)
 
 // Color definitions for dark theme
@@ -151,7 +151,7 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
     SetupUI();
 }
 
-// RGB LCD实现
+// RGB LCD Implementation
 RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                            int width, int height, int offset_x, int offset_y,
                            bool mirror_x, bool mirror_y, bool swap_xy,
@@ -273,7 +273,7 @@ MipiLcdDisplay::MipiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel
 }
 
 LcdDisplay::~LcdDisplay() {
-    // 然后再清理 LVGL 对象
+    // Clean up LVGL objects
     if (content_ != nullptr) {
         lv_obj_del(content_);
     }
@@ -342,8 +342,15 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_border_color(content_, current_theme_.border, 0); // Border color for chat area
 
     // Enable scrolling for chat content
-    lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_OFF);
+    // Set to AUTO so the scrollbar appears when dragging/scrolling
+    lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_scroll_dir(content_, LV_DIR_VER);
+
+    // Ensure scroll flags are set
+    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLL_ELASTIC);   // Bouncy scroll effect
+    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLL_MOMENTUM);  // Momentum scroll effect
+    ESP_LOGI(TAG, "Chat content area initialized with SCROLLABLE flags");
 
     // Create a flex container for chat messages
     lv_obj_set_flex_flow(content_, LV_FLEX_FLOW_COLUMN);
@@ -363,17 +370,9 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_pad_top(status_bar_, 2, 0);
     lv_obj_set_style_pad_bottom(status_bar_, 2, 0);
     lv_obj_set_scrollbar_mode(status_bar_, LV_SCROLLBAR_MODE_OFF);
-    // 设置状态栏的内容垂直居中
+    // Center status bar content vertically
     lv_obj_set_flex_align(status_bar_, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // 创建emotion_label_在状态栏最左侧
-    /*
-    emotion_label_ = lv_label_create(status_bar_);
-    lv_obj_set_style_text_font(emotion_label_, &font_awesome_30_4, 0);
-    lv_obj_set_style_text_color(emotion_label_, current_theme_.text, 0);
-    lv_label_set_text(emotion_label_, FONT_AWESOME_AI_CHIP);
-    lv_obj_set_style_margin_right(emotion_label_, 5, 0); // 添加右边距，与后面的元素分隔
-*/
     emotion_label_ = nullptr;
     notification_label_ = lv_label_create(status_bar_);
     lv_obj_set_flex_grow(notification_label_, 1);
@@ -398,13 +397,13 @@ void LcdDisplay::SetupUI() {
     lv_label_set_text(network_label_, "");
     lv_obj_set_style_text_font(network_label_, fonts_.icon_font, 0);
     lv_obj_set_style_text_color(network_label_, current_theme_.text, 0);
-    lv_obj_set_style_margin_left(network_label_, 5, 0); // 添加左边距，与前面的元素分隔
+    lv_obj_set_style_margin_left(network_label_, 5, 0); // Add left margin
 
     battery_label_ = lv_label_create(status_bar_);
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, fonts_.icon_font, 0);
     lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
-    lv_obj_set_style_margin_left(battery_label_, 5, 0); // 添加左边距，与前面的元素分隔
+    lv_obj_set_style_margin_left(battery_label_, 5, 0); // Add left margin
 
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
@@ -429,36 +428,31 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         return;
     }
     
-    //避免出现空的消息框
+    // Avoid empty message boxes
     if(strlen(content) == 0) return;
     
-    // 检查消息数量是否超过限制
+    // Check if message count exceeds limit
     uint32_t child_count = lv_obj_get_child_cnt(content_);
     if (child_count >= MAX_MESSAGES) {
-        // 删除最早的消息（第一个子对象）
+        // Delete the oldest message (first child)
         lv_obj_t* first_child = lv_obj_get_child(content_, 0);
-        lv_obj_t* last_child = lv_obj_get_child(content_, child_count - 1);
         if (first_child != nullptr) {
             lv_obj_del(first_child);
         }
-        // Scroll to the last message immediately
-        if (last_child != nullptr) {
-            lv_obj_scroll_to_view_recursive(last_child, LV_ANIM_OFF);
-        }
     }
     
-    // 折叠系统消息（如果是系统消息，检查最后一个消息是否也是系统消息）
+    // Collapse system messages (if the last message was also a system message)
     if (strcmp(role, "system") == 0 && child_count > 0) {
-        // 获取最后一个消息容器
+        // Get the last message container
         lv_obj_t* last_container = lv_obj_get_child(content_, child_count - 1);
         if (last_container != nullptr && lv_obj_get_child_cnt(last_container) > 0) {
-            // 获取容器内的气泡
+            // Get the bubble inside the container
             lv_obj_t* last_bubble = lv_obj_get_child(last_container, 0);
             if (last_bubble != nullptr) {
-                // 检查气泡类型是否为系统消息
+                // Check bubble type
                 void* bubble_type_ptr = lv_obj_get_user_data(last_bubble);
                 if (bubble_type_ptr != nullptr && strcmp((const char*)bubble_type_ptr, "system") == 0) {
-                    // Nếu cuối cùng cũng là tin nhắn hệ thống thì xóa cái cũ đi
+                    // If the last one was also a system message, delete the old one
                     lv_obj_del(last_container);
                 }
             }
@@ -470,7 +464,7 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_obj_set_style_radius(msg_bubble, 8, 0);
     lv_obj_set_scrollbar_mode(msg_bubble, LV_SCROLLBAR_MODE_OFF);
 
-    // THAY ĐỔI: Không hiển thị viền nếu đang ở chế độ STT Only
+    // CHANGE: No border if STT Only mode is active
     if (stt_mode_active_) {
         lv_obj_set_style_border_width(msg_bubble, 0, 0);
     } else {
@@ -484,32 +478,32 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_obj_t* msg_text = lv_label_create(msg_bubble);
     lv_label_set_text(msg_text, content);
     
-    // 计算文本实际宽度
+    // Calculate text actual width
     lv_coord_t text_width = lv_txt_get_width(content, strlen(content), fonts_.text_font, 0);
 
-    // 计算气泡宽度
-    lv_coord_t max_width = LV_HOR_RES * 85 / 100 - 16;  // 屏幕宽度的85%
+    // Calculate bubble width
+    lv_coord_t max_width = LV_HOR_RES * 85 / 100 - 16;  // 85% of screen width
     lv_coord_t min_width = 20;  
     lv_coord_t bubble_width;
     
-    // 确保文本宽度不小于最小宽度
+    // Ensure text width is not smaller than min width
     if (text_width < min_width) {
         text_width = min_width;
     }
 
-    // 如果文本宽度小于最大宽度，使用文本宽度
+    // Use text width if smaller than max width
     if (text_width < max_width) {
         bubble_width = text_width; 
     } else {
         bubble_width = max_width;
     }
     
-    // 设置消息文本的宽度
-    lv_obj_set_width(msg_text, bubble_width);  // 减去padding
+    // Set message text width
+    lv_obj_set_width(msg_text, bubble_width);  // Minus padding
     lv_label_set_long_mode(msg_text, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(msg_text, fonts_.text_font, 0);
 
-    // 设置气泡宽度
+    // Set bubble width
     lv_obj_set_width(msg_bubble, bubble_width);
     lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
 
@@ -520,7 +514,7 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         // Set text color for contrast
         lv_obj_set_style_text_color(msg_text, current_theme_.text, 0);
         
-        // 设置自定义属性标记气泡类型
+        // Set user data to identify bubble type
         lv_obj_set_user_data(msg_bubble, (void*)"user");
         
         // Set appropriate width for content
@@ -535,7 +529,7 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         // Set text color for contrast
         lv_obj_set_style_text_color(msg_text, current_theme_.text, 0);
         
-        // 设置自定义属性标记气泡类型
+        // Set user data to identify bubble type
         lv_obj_set_user_data(msg_bubble, (void*)"assistant");
         
         // Set appropriate width for content
@@ -550,7 +544,7 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         // Set text color for contrast
         lv_obj_set_style_text_color(msg_text, current_theme_.system_text, 0);
         
-        // 设置自定义属性标记气泡类型
+        // Set user data to identify bubble type
         lv_obj_set_user_data(msg_bubble, (void*)"system");
         
         // Set appropriate width for content
@@ -582,23 +576,23 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         // Auto-scroll to this container
         lv_obj_scroll_to_view_recursive(container, LV_ANIM_ON);
     } else if (strcmp(role, "system") == 0) {
-        // 为系统消息创建全宽容器以确保居中对齐
+        // Create full-width container for system messages to ensure center alignment
         lv_obj_t* container = lv_obj_create(content_);
         lv_obj_set_width(container, LV_HOR_RES);
         lv_obj_set_height(container, LV_SIZE_CONTENT);
         
-        // 使容器透明且无边框
+        // Make container transparent and borderless
         lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(container, 0, 0);
         lv_obj_set_style_pad_all(container, 0, 0);
         
-        // 将消息气泡移入此容器
+        // Move the message bubble into this container
         lv_obj_set_parent(msg_bubble, container);
         
-        // 将气泡居中对齐在容器中
+        // Center align the bubble in the container
         lv_obj_align(msg_bubble, LV_ALIGN_CENTER, 0, 0);
         
-        // 自动滚动底部
+        // Auto-scroll bottom
         lv_obj_scroll_to_view_recursive(container, LV_ANIM_ON);
     } else {
         // For assistant messages
@@ -625,7 +619,7 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
         lv_obj_set_style_radius(img_bubble, 8, 0);
         lv_obj_set_scrollbar_mode(img_bubble, LV_SCROLLBAR_MODE_OFF);
 
-        // THAY ĐỔI: Không hiển thị viền nếu đang ở chế độ STT Only
+        // CHANGE: No border if STT Only mode is active
         if (stt_mode_active_) {
             lv_obj_set_style_border_width(img_bubble, 0, 0);
         } else {
@@ -638,7 +632,7 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
         // Set image bubble background color (similar to system message)
         lv_obj_set_style_bg_color(img_bubble, current_theme_.assistant_bubble, 0);
         
-        // 设置自定义属性标记气泡类型
+        // Set user data to identify bubble type
         lv_obj_set_user_data(img_bubble, (void*)"image");
         
         // Create the image object inside the bubble
@@ -757,14 +751,9 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_bg_color(content_, current_theme_.chat_background, 0);
     lv_obj_set_style_border_color(content_, current_theme_.border, 0); // Border color for content
 
-    lv_obj_set_flex_flow(content_, LV_FLEX_FLOW_COLUMN); // 垂直布局（从上到下）
-    lv_obj_set_flex_align(content_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY); // 子对象居中对齐，等距分布
+    lv_obj_set_flex_flow(content_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
 
-/*    emotion_label_ = lv_label_create(content_);
-    lv_obj_set_style_text_font(emotion_label_, &font_awesome_30_4, 0);
-    lv_obj_set_style_text_color(emotion_label_, current_theme_.text, 0);
-    lv_label_set_text(emotion_label_, FONT_AWESOME_AI_CHIP);
-*/
     emotion_label_ = nullptr;
     preview_image_ = lv_image_create(content_);
     lv_obj_set_size(preview_image_, width_ * 0.5, height_ * 0.5);
@@ -773,9 +762,9 @@ void LcdDisplay::SetupUI() {
 
     chat_message_label_ = lv_label_create(content_);
     lv_label_set_text(chat_message_label_, "");
-    lv_obj_set_width(chat_message_label_, LV_HOR_RES * 0.9); // 限制宽度为屏幕宽度的 90%
-    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP); // 设置为自动换行模式
-    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0); // 设置文本居中对齐
+    lv_obj_set_width(chat_message_label_, LV_HOR_RES * 0.9);
+    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(chat_message_label_, current_theme_.text, 0);
 
     /* Status bar */
@@ -836,15 +825,15 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
     if (img_dsc != nullptr) {
         // zoom factor 0.5
         lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w);
-        // 设置图片源并显示预览图片
+        // Set image src and show
         lv_image_set_src(preview_image_, img_dsc);
         lv_obj_clear_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
-        // 隐藏emotion_label_
+        // Hide emotion_label_
         if (emotion_label_ != nullptr) {
             lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
         }
     } else {
-        // 隐藏预览图片并显示emotion_label_
+        // Hide preview_image_ and show emotion_label_
         lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
         if (emotion_label_ != nullptr) {
             lv_obj_clear_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
@@ -859,7 +848,7 @@ void LcdDisplay::SetStatus(const char* status) {
 
     lv_label_set_text(status_label_, status);
 
-    // Kiểm tra đa ngôn ngữ để đổi màu chữ Status
+    // Check multilingual to change Status text color
     if (status != nullptr && Lang::Strings::HEARING_AID != nullptr &&
         strcmp(status, Lang::Strings::HEARING_AID) == 0) {
         lv_obj_set_style_text_color(status_label_, lv_color_hex(0x00FF00), 0);
@@ -873,13 +862,13 @@ void LcdDisplay::SetSttMode(bool enable) {
     stt_mode_active_ = enable;
 
     if (enable) {
-        // Chỉ đổi màu nền nội dung
+        // Only change content background color
         if (content_ != nullptr) {
             lv_obj_set_style_bg_color(content_, STT_MODE_BG_COLOR, 0);
             lv_obj_set_style_border_width(content_, 0, 0);
         }
     } else {
-        // Quay về màu nền nội dung của Theme hiện tại
+        // Revert to current theme
         if (content_ != nullptr) {
             lv_obj_set_style_bg_color(content_, current_theme_.chat_background, 0);
             lv_obj_set_style_border_width(content_, 1, 0);
@@ -918,7 +907,7 @@ void LcdDisplay::SetEmotion(const char* emotion) {
         {"🙄", "confused"}
     };
     
-    // 查找匹配的表情
+    // Find matching emotion
     std::string_view emotion_view(emotion);
     auto it = std::find_if(emotions.begin(), emotions.end(),
         [&emotion_view](const Emotion& e) { return e.text == emotion_view; });
@@ -928,7 +917,7 @@ void LcdDisplay::SetEmotion(const char* emotion) {
         return;
     }
 
-    // 如果找到匹配的表情就显示对应图标，否则显示默认的neutral表情
+    // If found, show icon, otherwise show neutral
     lv_obj_set_style_text_font(emotion_label_, fonts_.emoji_font, 0);
     if (it != emotions.end()) {
         lv_label_set_text(emotion_label_, it->icon);
@@ -937,7 +926,7 @@ void LcdDisplay::SetEmotion(const char* emotion) {
     }
 
 #if !CONFIG_USE_WECHAT_MESSAGE_STYLE
-    // 显示emotion_label_，隐藏preview_image_
+    // Show emotion_label_, hide preview_image_
     lv_obj_clear_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
     if (preview_image_ != nullptr) {
         lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
@@ -954,7 +943,7 @@ void LcdDisplay::SetIcon(const char* icon) {
     lv_label_set_text(emotion_label_, icon);
 
 #if !CONFIG_USE_WECHAT_MESSAGE_STYLE
-    // 显示emotion_label_，隐藏preview_image_
+    // Show emotion_label_, hide preview_image_
     lv_obj_clear_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
     if (preview_image_ != nullptr) {
         lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
@@ -1029,33 +1018,33 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
             
             lv_obj_t* bubble = nullptr;
             
-            // 检查这个对象是容器还是气泡
-            // 如果是容器（用户或系统消息），则获取其子对象作为气泡
-            // 如果是气泡（助手消息），则直接使用
+            // Check if this object is a container or a bubble
+            // If it's a container (user or system messages), get its child as bubble
+            // If it's a bubble (assistant messages), use it directly
             if (lv_obj_get_child_cnt(obj) > 0) {
-                // 可能是容器，检查它是否为用户或系统消息容器
-                // 用户和系统消息容器是透明的
+                // Could be a container, check if it's user or system message container
+                // User and system message containers are transparent
                 lv_opa_t bg_opa = lv_obj_get_style_bg_opa(obj, 0);
                 if (bg_opa == LV_OPA_TRANSP) {
-                    // 这是用户或系统消息的容器
+                    // This is a user or system message container
                     bubble = lv_obj_get_child(obj, 0);
                 } else {
-                    // 这可能是助手消息的气泡自身
+                    // This might be the assistant bubble itself
                     bubble = obj;
                 }
             } else {
-                // 没有子元素，可能是其他UI元素，跳过
+                // No children, might be other UI element, skip
                 continue;
             }
             
             if (bubble == nullptr) continue;
             
-            // 使用保存的用户数据来识别气泡类型
+            // Use saved user data to identify bubble type
             void* bubble_type_ptr = lv_obj_get_user_data(bubble);
             if (bubble_type_ptr != nullptr) {
                 const char* bubble_type = static_cast<const char*>(bubble_type_ptr);
                 
-                // 根据气泡类型应用正确的颜色
+                // Apply correct color based on bubble type
                 if (strcmp(bubble_type, "user") == 0) {
                     lv_obj_set_style_bg_color(bubble, current_theme_.user_bubble, 0);
                 } else if (strcmp(bubble_type, "assistant") == 0) {
@@ -1073,7 +1062,7 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
                 if (lv_obj_get_child_cnt(bubble) > 0) {
                     lv_obj_t* text = lv_obj_get_child(bubble, 0);
                     if (text != nullptr) {
-                        // 根据气泡类型设置文本颜色
+                        // Set text color based on bubble type
                         if (strcmp(bubble_type, "system") == 0) {
                             lv_obj_set_style_text_color(text, current_theme_.system_text, 0);
                         } else {
@@ -1082,33 +1071,33 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
                     }
                 }
             } else {
-                // 如果没有标记，回退到之前的逻辑（颜色比较）
-                // ...保留原有的回退逻辑...
+                // If no tag, fallback to previous logic (color comparison)
+                // ...retain original fallback logic...
                 lv_color_t bg_color = lv_obj_get_style_bg_color(bubble, 0);
             
-                // 改进bubble类型检测逻辑，不仅使用颜色比较
+                // Improved bubble type detection logic, not just color comparison
                 bool is_user_bubble = false;
                 bool is_assistant_bubble = false;
                 bool is_system_bubble = false;
             
-                // 检查用户bubble
+                // Check user bubble
                 if (lv_color_eq(bg_color, DARK_USER_BUBBLE_COLOR) || 
                     lv_color_eq(bg_color, LIGHT_USER_BUBBLE_COLOR) ||
                     lv_color_eq(bg_color, current_theme_.user_bubble)) {
                     is_user_bubble = true;
                 }
-                // 检查系统bubble
+                // Check system bubble
                 else if (lv_color_eq(bg_color, DARK_SYSTEM_BUBBLE_COLOR) || 
                          lv_color_eq(bg_color, LIGHT_SYSTEM_BUBBLE_COLOR) ||
                          lv_color_eq(bg_color, current_theme_.system_bubble)) {
                     is_system_bubble = true;
                 }
-                // 剩余的都当作助手bubble处理
+                // Rest is treated as assistant bubble
                 else {
                     is_assistant_bubble = true;
                 }
             
-                // 根据bubble类型应用正确的颜色
+                // Apply correct color based on bubble type
                 if (is_user_bubble) {
                     lv_obj_set_style_bg_color(bubble, current_theme_.user_bubble, 0);
                 } else if (is_assistant_bubble) {
@@ -1124,7 +1113,7 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
                 if (lv_obj_get_child_cnt(bubble) > 0) {
                     lv_obj_t* text = lv_obj_get_child(bubble, 0);
                     if (text != nullptr) {
-                        // 回退到颜色检测逻辑
+                        // Fallback to color detection logic
                         if (lv_color_eq(bg_color, current_theme_.system_bubble) ||
                             lv_color_eq(bg_color, DARK_SYSTEM_BUBBLE_COLOR) || 
                             lv_color_eq(bg_color, LIGHT_SYSTEM_BUBBLE_COLOR)) {

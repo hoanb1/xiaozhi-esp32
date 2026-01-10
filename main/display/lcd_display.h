@@ -107,5 +107,6 @@ public:
                       int width, int height, int offset_x, int offset_y,
                       bool mirror_x, bool mirror_y, bool swap_xy,
                       DisplayFonts fonts);
+
 };
 #endif // LCD_DISPLAY_H
