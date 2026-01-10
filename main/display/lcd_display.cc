@@ -341,12 +341,11 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_bg_color(content_, current_theme_.chat_background, 0); // Background for chat area
     lv_obj_set_style_border_color(content_, current_theme_.border, 0); // Border color for chat area
 
-    // Enable scrolling for chat content
-    // Set to AUTO so the scrollbar appears when dragging/scrolling
-    lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_set_scroll_dir(content_, LV_DIR_VER);
     lv_obj_add_flag(content_, LV_OBJ_FLAG_EVENT_BUBBLE);
 
+    // Enable scrolling for chat content
+    lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(content_, LV_DIR_VER);
 
     // Ensure scroll flags are set
     lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLLABLE);
@@ -752,6 +751,8 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_pad_all(content_, 5, 0);
     lv_obj_set_style_bg_color(content_, current_theme_.chat_background, 0);
     lv_obj_set_style_border_color(content_, current_theme_.border, 0); // Border color for content
+
+    lv_obj_add_flag(content_, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     lv_obj_set_flex_flow(content_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);

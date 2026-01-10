@@ -62,6 +62,8 @@
 #define FT6336_TOUCH1_MISC 0x08
 #define FT6336_THRESHOLD 0x80
 #define FT6336_CTRL 0x86
+#define FT6336_DEVICE_MODE 0x00  // Device mode register
+#define FT6336_TOUCH_THRESHOLD 0x80  // Touch threshold register
 #define FT6336_FIRMWARE_ID 0xA6
 
 #endif  // _BOARD_CONFIG_H_
