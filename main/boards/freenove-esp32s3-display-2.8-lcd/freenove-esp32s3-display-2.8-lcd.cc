@@ -73,17 +73,16 @@ private:
         uint8_t data[4];
         if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) return false;
 
-        // Tọa độ thô từ chip (Portrait)
+        // Tọa độ thô từ chip
         uint16_t raw_x = ((data[0] & 0x0F) << 8) | data[1];
         uint16_t raw_y = ((data[2] & 0x0F) << 8) | data[3];
 
-        // ĐỂ KHỚP HƯỚNG VUỐT (SCROLL) VỚI HIỂN THỊ NGANG:
-        // Màn hình ILI9341 xoay ngang (320x240) yêu cầu:
-        x = raw_y;           // Swap trục dài (Y) sang X của màn hình
-        y = 240 - raw_x;     // Invert và Swap trục ngắn (X) sang Y của màn hình
 
-        // Log mức độ Debug thấp để tránh tràn màn hình, chỉ bật khi cần check tọa độ chính xác
-         ESP_LOGD(TAG, "Touch Point: x=%d, y=%d", x, y);
+        x = raw_x;
+        y = raw_y;
+
+
+        ESP_LOGD(TAG, "Touch Raw: [%d, %d] -> Screen: [%d, %d]", raw_x, raw_y, x, y);
         return true;
     }
 
@@ -126,9 +125,8 @@ private:
 
     static void OnDisplayClicked(lv_event_t *e) {
         lv_event_code_t code = lv_event_get_code(e);
-        // Sử dụng CLICKED thay vì SHORT_CLICKED để tăng độ nhạy khi chạm
         if(code == LV_EVENT_CLICKED) {
-            ESP_LOGI(TAG, "Display Clicked -> Toggle Chat");
+            ESP_LOGI(TAG, "Screen clicked - Toggle chat state");
             Application::GetInstance().ToggleChatState();
         }
     }
@@ -248,8 +246,7 @@ public:
             lv_indev_set_read_cb(indev, LvglTouchCb);
             lv_indev_set_user_data(indev, this);
 
-            // Đăng ký sự kiện chạm vào màn hình
-            // Quan trọng: Gán trực tiếp vào màn hình đang hoạt động (active screen)
+            // Gán sự kiện click vào toàn màn hình
             lv_obj_t* screen = lv_scr_act();
             lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(screen, OnDisplayClicked, LV_EVENT_CLICKED, nullptr);
