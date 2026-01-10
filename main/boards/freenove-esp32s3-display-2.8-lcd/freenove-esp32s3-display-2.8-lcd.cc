@@ -1,5 +1,3 @@
-// path: main/boards/freenove-esp32s3-display-2.8-lcd/freenove_esp32s3_display_board.cc
-
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
@@ -130,8 +128,10 @@ private:
                 if ((now - last_touch_time) > debounce_time) {
                         ESP_LOGI(TAG, "Touch detected! Toggle chat state.");
                     auto &app = Application::GetInstance();
+                        // Nếu đang STT Mode thì không dùng cảm ứng để toggle tránh loạn
+                        if (!stt_only_active_) {
                     app.ToggleChatState();
-                    
+                        }
                     last_touch_time = now;
                 }
                     was_touched = true;
@@ -208,33 +208,32 @@ private:
     }
 
     void InitializeButtons() {
-        // BẤM NHANH (CLICK): Luôn thực hiện ToggleChatState
         boot_button_.OnClick([this]() {
             auto &app = Application::GetInstance();
 
+            // Nếu thiết bị đang khởi động và chưa kết nối wifi thì reset cấu hình wifi
             if (app.GetDeviceState() == kDeviceStateStarting &&
                 !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
                 return;
             }
 
+            // Bấm một cái: Toggle trạng thái nghe/nghỉ (bất kể đang ở mode nào)
+            // Đã xóa logic thoát chế độ STT Only ở đây.
             ESP_LOGI(TAG, "Boot button clicked. Toggling chat state...");
             app.ToggleChatState();
         });
 
-        // NHẤN GIỮ (LONG PRESS): Chuyển chế độ VÀ bắt đầu nghe luôn
         boot_button_.OnLongPress([this]() {
             auto &app = Application::GetInstance();
 
+            // Đảo trạng thái chế độ STT Only
             stt_only_active_ = !stt_only_active_;
-            ESP_LOGI(TAG, "STT Only Mode toggled: %s. Activating listening session.", stt_only_active_ ? "ON" : "OFF");
 
-            // 1. Cập nhật mode (đổi màu UI, cài đặt cờ stt_only_mode_)
+            ESP_LOGI(TAG, "Long press: Switching Mode. STT Only Active: %d", stt_only_active_);
+
+            // Chỉ chuyển đổi chế độ, Application sẽ tự quyết định trạng thái Listening phù hợp
             app.SetSttOnlyMode(stt_only_active_);
-
-            // 2. Kích hoạt chế độ nghe ngay lập tức
-            // Nếu đang Idle, nó sẽ bắt đầu nghe. Nếu đang nói, nó sẽ ngắt lời và nghe.
-            app.ToggleChatState();
         });
     }
 

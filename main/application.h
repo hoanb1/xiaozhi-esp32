@@ -141,6 +141,9 @@ private:
     void AudioLoop();
     void EnterAudioTestingMode();
     void ExitAudioTestingMode();
+
+    void HandleSttMode(const cJSON *root);
+    void HandleNormalMode(const cJSON *root);
 };
 
 #endif // _APPLICATION_H_

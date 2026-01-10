@@ -43,6 +43,7 @@
 #define DISPLAY_MIRROR_X      false
 #define DISPLAY_MIRROR_Y      false
 #define DISPLAY_SWAP_XY       true
+
 #define DISPLAY_INVERT_COLOR  true
 #define DISPLAY_RGB_ORDER     LCD_RGB_ELEMENT_ORDER_BGR
 #define DISPLAY_OFFSET_X      0

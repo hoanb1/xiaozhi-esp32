@@ -105,7 +105,7 @@ Application::~Application() {
 void Application::CheckNewVersion(Ota &ota) {
     const int MAX_RETRY = 10;
     int retry_count = 0;
-    int retry_delay = 10; // 初始重试延迟为10秒
+    int retry_delay = 10;
 
     while (true) {
         SetDeviceState(kDeviceStateActivating);
@@ -131,11 +131,11 @@ void Application::CheckNewVersion(Ota &ota) {
                     break;
                 }
             }
-            retry_delay *= 2; // 每次重试后延迟时间翻倍
+            retry_delay *= 2;
             continue;
         }
         retry_count = 0;
-        retry_delay = 10; // 重置重试延迟时间
+        retry_delay = 10;
 
         if (ota.HasNewVersion()) {
             Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
@@ -151,7 +151,7 @@ void Application::CheckNewVersion(Ota &ota) {
             auto &board = Board::GetInstance();
             board.SetPowerSaveMode(false);
             wake_word_->StopDetection();
-            // 预先关闭音频输出，避免升级过程有音频操作
+            // Pre-close audio output to avoid audio operations during upgrade
             auto codec = board.GetAudioCodec();
             codec->EnableInput(false);
             codec->EnableOutput(false);
@@ -325,6 +325,45 @@ void Application::ToggleChatState() {
         return;
     }
 
+    // -------------------------------------------------------------
+    // LOGIC CHO STT ONLY MODE
+    // -------------------------------------------------------------
+    if (stt_only_mode_) {
+        // Nếu đang nghe hoặc nói -> Người dùng muốn TẮT (Nghỉ)
+        if (device_state_ == kDeviceStateListening || device_state_ == kDeviceStateSpeaking || device_state_ ==
+            kDeviceStateConnecting) {
+            ESP_LOGI(TAG, "STT Mode: User toggled to PAUSE (Idle)");
+            // Đặt cờ ManualStop để Watchdog không tự bật lại
+            listening_mode_ = kListeningModeManualStop;
+            Schedule([this]() {
+                if (protocol_->IsAudioChannelOpened()) {
+                    protocol_->CloseAudioChannel();
+                } else {
+                    SetDeviceState(kDeviceStateIdle);
+                }
+            });
+        }
+        // Nếu đang nghỉ -> Người dùng muốn BẬT (Nghe lại)
+        else {
+            ESP_LOGI(TAG, "STT Mode: User toggled to RESUME (Listening)");
+            // Đặt cờ Realtime để Watchdog có thể hỗ trợ nếu rớt mạng
+            listening_mode_ = kListeningModeRealtime;
+            Schedule([this]() {
+                if (!protocol_->IsAudioChannelOpened()) {
+                    SetDeviceState(kDeviceStateConnecting);
+                    if (!protocol_->OpenAudioChannel()) {
+                        return;
+                    }
+                }
+                SetDeviceState(kDeviceStateListening);
+            });
+        }
+        return;
+    }
+
+    // -------------------------------------------------------------
+    // LOGIC CHO CHẾ ĐỘ THƯỜNG (NORMAL MODE)
+    // -------------------------------------------------------------
     if (device_state_ == kDeviceStateIdle) {
         Schedule([this]() {
             if (!protocol_->IsAudioChannelOpened()) {
@@ -404,6 +443,126 @@ void Application::StopListening() {
     });
 }
 
+// -------------------------------------------------------------------------
+// SEPARATE MESSAGE HANDLERS
+// -------------------------------------------------------------------------
+
+void Application::HandleSttMode(const cJSON *root) {
+    auto display = Board::GetInstance().GetDisplay();
+    auto type = cJSON_GetObjectItem(root, "type");
+
+    // 1. Handle STT (Text display)
+    if (strcmp(type->valuestring, "stt") == 0) {
+        auto text = cJSON_GetObjectItem(root, "text");
+        if (cJSON_IsString(text)) {
+            ESP_LOGI(TAG, "STT Mode >> %s", text->valuestring);
+            Schedule([this, display, message = std::string(text->valuestring)]() {
+                display->SetChatMessage("user", message.c_str());
+            });
+        }
+    }
+    // 2. Handle TTS (Loop control only if restart is desired)
+    else if (strcmp(type->valuestring, "tts") == 0) {
+        auto state = cJSON_GetObjectItem(root, "state");
+        if (state && strcmp(state->valuestring, "stop") == 0) {
+            // Note: If server sends Goodbye, this might not trigger,
+            // relying on OnAudioChannelClosed for the "Goodbye" event.
+            // If you still want loop here, keep it, but "Goodbye" takes precedence in network event.
+        }
+    }
+    // 3. Handle System Commands
+    else if (strcmp(type->valuestring, "system") == 0) {
+        auto command = cJSON_GetObjectItem(root, "command");
+        if (cJSON_IsString(command) && strcmp(command->valuestring, "reboot") == 0) {
+            Schedule([this]() { Reboot(); });
+        }
+    }
+}
+
+void Application::HandleNormalMode(const cJSON *root) {
+    auto display = Board::GetInstance().GetDisplay();
+    auto type = cJSON_GetObjectItem(root, "type");
+
+    if (strcmp(type->valuestring, "tts") == 0) {
+        auto state = cJSON_GetObjectItem(root, "state");
+        if (strcmp(state->valuestring, "start") == 0) {
+            Schedule([this]() {
+                aborted_ = false;
+                if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
+                    SetDeviceState(kDeviceStateSpeaking);
+                }
+            });
+        } else if (strcmp(state->valuestring, "stop") == 0) {
+            Schedule([this]() {
+                background_task_->WaitForCompletion();
+                if (device_state_ == kDeviceStateSpeaking) {
+                    if (listening_mode_ == kListeningModeManualStop) {
+                        SetDeviceState(kDeviceStateIdle);
+                    } else {
+                        SetDeviceState(kDeviceStateListening);
+                    }
+                }
+            });
+        } else if (strcmp(state->valuestring, "sentence_start") == 0) {
+            auto text = cJSON_GetObjectItem(root, "text");
+            if (cJSON_IsString(text)) {
+                ESP_LOGI(TAG, "<< %s", text->valuestring);
+                Schedule([this, display, message = std::string(text->valuestring)]() {
+                    display->SetChatMessage("assistant", message.c_str());
+                });
+            }
+        }
+    } else if (strcmp(type->valuestring, "stt") == 0) {
+        auto text = cJSON_GetObjectItem(root, "text");
+        if (cJSON_IsString(text)) {
+            ESP_LOGI(TAG, ">> %s", text->valuestring);
+            Schedule([this, display, message = std::string(text->valuestring)]() {
+                display->SetChatMessage("user", message.c_str());
+            });
+        }
+    } else if (strcmp(type->valuestring, "llm") == 0) {
+        auto emotion = cJSON_GetObjectItem(root, "emotion");
+        if (cJSON_IsString(emotion)) {
+            Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
+                display->SetEmotion(emotion_str.c_str());
+            });
+        }
+#if CONFIG_IOT_PROTOCOL_MCP
+    } else if (strcmp(type->valuestring, "mcp") == 0) {
+        auto payload = cJSON_GetObjectItem(root, "payload");
+        if (cJSON_IsObject(payload)) {
+            McpServer::GetInstance().ParseMessage(payload);
+        }
+#endif
+#if CONFIG_IOT_PROTOCOL_XIAOZHI
+    } else if (strcmp(type->valuestring, "iot") == 0) {
+            auto commands = cJSON_GetObjectItem(root, "commands");
+            if (cJSON_IsArray(commands)) {
+                auto &thing_manager = iot::ThingManager::GetInstance();
+                for (int i = 0; i < cJSON_GetArraySize(commands); ++i) {
+                    auto command = cJSON_GetArrayItem(commands, i);
+                    thing_manager.Invoke(command);
+                }
+            }
+#endif
+    } else if (strcmp(type->valuestring, "system") == 0) {
+        auto command = cJSON_GetObjectItem(root, "command");
+        if (cJSON_IsString(command)) {
+            if (strcmp(command->valuestring, "reboot") == 0) {
+                Schedule([this]() { Reboot(); });
+            }
+        }
+    } else if (strcmp(type->valuestring, "alert") == 0) {
+        auto status = cJSON_GetObjectItem(root, "status");
+        auto message = cJSON_GetObjectItem(root, "message");
+        auto emotion = cJSON_GetObjectItem(root, "emotion");
+        if (cJSON_IsString(status) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
+            Alert(status->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::P3_VIBRATION);
+        }
+    }
+}
+
+
 void Application::Start() {
     auto &board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
@@ -456,8 +615,8 @@ void Application::Start() {
     display->UpdateStatusBar(true);
 
     // Check for new firmware version or get the MQTT broker address
-    Ota ota;
-    CheckNewVersion(ota);
+    //  Ota ota;
+    //CheckNewVersion(ota);
 
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
@@ -509,132 +668,44 @@ void Application::Start() {
         }
 #endif
     });
+
+    // -------------------------------------------------------------
+    // FIX: LOGIC KHI KẾT THÚC SESSION (GOODBYE)
+    // -------------------------------------------------------------
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveMode(true);
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
-            display->SetChatMessage("system", "");
-            SetDeviceState(kDeviceStateIdle);
+
+            if (stt_only_mode_) {
+                // Khi Server gửi Goodbye (Session Closed):
+                ESP_LOGI(TAG, "STT Mode: Server sent Goodbye. Stopping.");
+
+                // 1. Dừng nghe về Idle
+                SetDeviceState(kDeviceStateIdle);
+
+                // 2. QUAN TRỌNG: Đánh dấu ManualStop để Watchdog KHÔNG tự bật lại
+                listening_mode_ = kListeningModeManualStop;
+
+                // 3. Thông báo lên màn hình để user biết
+                display->SetChatMessage("system", "Session Ended. Press Boot to Start.");
+                display->SetStatus("PAUSED");
+            } else {
+                SetDeviceState(kDeviceStateIdle);
+                display->SetChatMessage("system", "");
+            }
         });
     });
-    protocol_->OnIncomingJson([this, display](const cJSON *root) {
-        // Parse JSON data
-        auto type = cJSON_GetObjectItem(root, "type");
-        if (strcmp(type->valuestring, "tts") == 0) {
-            auto state = cJSON_GetObjectItem(root, "state");
-            ESP_LOGD(TAG, "TTS state: %s", state->valuestring);
 
-            // QUAN TRỌNG: Xử lý cho chế độ STT Only
-            if (stt_only_mode_) {
-                if (state && strcmp(state->valuestring, "stop") == 0) {
-                    ESP_LOGI(TAG, "STT Loop: Received TTS STOP, restarting listening cycle...");
-                    Schedule([this]() {
-                        ESP_LOGI(TAG, "STT Loop Debug: Attempting to restart micro...");
-                        // Không dùng SetDeviceState truyền thống để tránh bị treo WaitForCompletion
-                        device_state_ = kDeviceStateListening;
-                        ESP_LOGI(TAG, "STATE: listening (STT Quick Jump)");
-
-                        audio_processor_->Stop();
-                        protocol_->SendStartListening(listening_mode_);
-                        opus_encoder_->ResetState();
-                        audio_processor_->Start();
-                        wake_word_->StopDetection();
-
-                        Board::GetInstance().GetLed()->OnStateChanged();
-                        ESP_LOGI(TAG, "STT Loop Debug: Micro restart sequence completed.");
-                    });
-                }
-                return;
-            }
-
-            if (strcmp(state->valuestring, "start") == 0) {
-                Schedule([this]() {
-                    aborted_ = false;
-                    if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
-                        SetDeviceState(kDeviceStateSpeaking);
-                    }
-                });
-            } else if (strcmp(state->valuestring, "stop") == 0) {
-                Schedule([this]() {
-                    background_task_->WaitForCompletion();
-                    if (device_state_ == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
-                            SetDeviceState(kDeviceStateIdle);
-                        } else {
-                            SetDeviceState(kDeviceStateListening);
-                        }
-                    }
-                });
-            } else if (strcmp(state->valuestring, "sentence_start") == 0) {
-                auto text = cJSON_GetObjectItem(root, "text");
-                if (cJSON_IsString(text)) {
-                    ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([this, display, message = std::string(text->valuestring)]() {
-                        display->SetChatMessage("assistant", message.c_str());
-                    });
-                }
-            }
-        } else if (strcmp(type->valuestring, "stt") == 0) {
-            auto text = cJSON_GetObjectItem(root, "text");
-            if (cJSON_IsString(text)) {
-                ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([this, display, message = std::string(text->valuestring)]() {
-                    display->SetChatMessage("user", message.c_str());
-                });
-            }
-        } else if (strcmp(type->valuestring, "llm") == 0) {
-            if (stt_only_mode_) return;
-            auto emotion = cJSON_GetObjectItem(root, "emotion");
-            if (cJSON_IsString(emotion)) {
-                Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
-                    display->SetEmotion(emotion_str.c_str());
-                });
-            }
-#if CONFIG_IOT_PROTOCOL_MCP
-        } else if (strcmp(type->valuestring, "mcp") == 0) {
-            auto payload = cJSON_GetObjectItem(root, "payload");
-            if (cJSON_IsObject(payload)) {
-                McpServer::GetInstance().ParseMessage(payload);
-            }
-#endif
-#if CONFIG_IOT_PROTOCOL_XIAOZHI
-        } else if (strcmp(type->valuestring, "iot") == 0) {
-                auto commands = cJSON_GetObjectItem(root, "commands");
-                if (cJSON_IsArray(commands)) {
-                    auto &thing_manager = iot::ThingManager::GetInstance();
-                    for (int i = 0; i < cJSON_GetArraySize(commands); ++i) {
-                        auto command = cJSON_GetArrayItem(commands, i);
-                        thing_manager.Invoke(command);
-                    }
-                }
-#endif
-        } else if (strcmp(type->valuestring, "system") == 0) {
-            auto command = cJSON_GetObjectItem(root, "command");
-            if (cJSON_IsString(command)) {
-                ESP_LOGI(TAG, "System command: %s", command->valuestring);
-                if (strcmp(command->valuestring, "reboot") == 0) {
-                    // Do a reboot if user requests a OTA update
-                    Schedule([this]() {
-                        Reboot();
-                    });
-                } else {
-                    // Unknown system command
-                    ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
-                }
-            }
-        } else if (strcmp(type->valuestring, "alert") == 0) {
-            auto status = cJSON_GetObjectItem(root, "status");
-            auto message = cJSON_GetObjectItem(root, "message");
-            auto emotion = cJSON_GetObjectItem(root, "emotion");
-            if (cJSON_IsString(status) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
-                Alert(status->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::P3_VIBRATION);
-            } else {
-                ESP_LOGW(TAG, "Alert command requires status, message and emotion");
-            }
+    // Main Message Dispatcher
+    protocol_->OnIncomingJson([this](const cJSON *root) {
+        if (stt_only_mode_) {
+            HandleSttMode(root);
         } else {
-            ESP_LOGW(TAG, "Unknown message type: %s", type->valuestring);
+            HandleNormalMode(root);
         }
     });
+
     bool protocol_started = protocol_->Start();
 
     audio_debugger_ = std::make_unique<AudioDebugger>();
@@ -662,8 +733,8 @@ void Application::Start() {
                     }
 
                     if (timestamp_queue_.size() > 3) {
-                        // 限制队列长度3
-                        timestamp_queue_.pop_front(); // 该包发送前先出队保持队列长度
+                        // Limit queue size to 3
+                        timestamp_queue_.pop_front();
                         return;
                     }
                 }
@@ -763,6 +834,27 @@ void Application::OnClockTimer() {
     auto display = Board::GetInstance().GetDisplay();
     display->UpdateStatusBar();
 
+    // STT Watchdog: Force restart listening if stuck in IDLE mode while STT_ONLY is enabled
+    // Only restart if we are NOT in "Manual Stop" mode (user pressed button to pause or server sent Goodbye)
+    if (stt_only_mode_ && device_state_ == kDeviceStateIdle) {
+        if (listening_mode_ != kListeningModeManualStop) {
+            // Check if user PAUSED it
+            if (clock_ticks_ % 2 == 0) {
+                // Check frequently
+                ESP_LOGI(TAG, "STT Watchdog: Device idle & should be running. Restarting...");
+                Schedule([this]() {
+                    if (device_state_ == kDeviceStateIdle) {
+                        // Check if we need to reopen the channel
+                        if (protocol_ && !protocol_->IsAudioChannelOpened()) {
+                            protocol_->OpenAudioChannel();
+                        }
+                        SetDeviceState(kDeviceStateListening);
+                    }
+                });
+            }
+        }
+    }
+
     // Print the debug info every 10 seconds
     if (clock_ticks_ % 10 == 0) {
         // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
@@ -771,7 +863,8 @@ void Application::OnClockTimer() {
 
         // If we have synchronized server time, set the status to clock "HH:MM" if the device is idle
         if (has_server_time_) {
-            if (device_state_ == kDeviceStateIdle) {
+            if (device_state_ == kDeviceStateIdle && !stt_only_mode_) {
+                // Do not overwrite status in STT mode
                 Schedule([this]() {
                     // Set status to clock "HH:MM"
                     time_t now = time(NULL);
@@ -982,7 +1075,7 @@ bool Application::ReadAudio(std::vector<int16_t> &data, int sample_rate, int sam
         }
     }
 
-    // 音频调试：发送原始音频数据
+    // Audio Debugging: Send raw audio data
     if (audio_debugger_) {
         audio_debugger_->Feed(data);
     }
@@ -1010,10 +1103,11 @@ void Application::SetDeviceState(DeviceState state) {
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
 
-    // TỐI ƯU: Chỉ đợi background task hoàn tất nếu KHÔNG ở chế độ STT Only.
-    // Việc đợi này ở STT mode là không cần thiết vì không cần phát âm thanh.
+    // OPTIMIZATION: Only wait for background task if NOT in STT Only mode.
+    // Waiting in STT mode is unnecessary as no audio output is required.
+    // This reduces dead time between sentences significantly.
     if (!stt_only_mode_) {
-    background_task_->WaitForCompletion();
+        background_task_->WaitForCompletion();
     }
 
     auto &board = Board::GetInstance();
@@ -1055,7 +1149,7 @@ void Application::SetDeviceState(DeviceState state) {
             }
             break;
         case kDeviceStateSpeaking:
-            // Continuous STT Logic: Nếu bật STT Only, bỏ qua trạng thái Speaking và quay lại Listening ngay lập tức
+            // Continuous STT Logic: If STT Only mode is on, skip Speaking state and jump back to Listening immediately
             if (stt_only_mode_) {
                 ESP_LOGI(TAG, "STT Loop Debug: Skipping speaking state due to stt_only_mode, jumping to LISTENING");
                 Schedule([this]() {
@@ -1206,9 +1300,12 @@ void Application::SetSttOnlyMode(bool enable) {
     // Update UI signal
     display->SetSttMode(enable);
 
+    // Reset Listen Mode flag to default (Realtime/Running)
+    listening_mode_ = kListeningModeRealtime;
+
     if (enable) {
         Schedule([this]() {
-            // Khi bật STT Mode, nếu đang Idle hoặc Speaking thì bật mic ngay
+            // When enabling STT Mode, if idle or speaking, start listening immediately
             if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateSpeaking) {
                 SetDeviceState(kDeviceStateListening);
             }
