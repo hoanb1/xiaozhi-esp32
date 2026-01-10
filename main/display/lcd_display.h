@@ -49,6 +49,8 @@ protected:
     
 public:
     ~LcdDisplay();
+    lv_obj_t *GetContentObject() const { return content_; }
+
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetIcon(const char* icon) override;
     virtual void SetPreviewImage(const lv_img_dsc_t* img_dsc) override;

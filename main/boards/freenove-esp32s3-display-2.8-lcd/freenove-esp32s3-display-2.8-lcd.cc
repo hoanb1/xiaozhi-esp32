@@ -65,35 +65,14 @@ private:
         return ret == ESP_OK;
     }
 
-    // Touch coordinate mapping verified via runtime logs
     bool ReadTouchPoint(uint16_t &x, uint16_t &y) {
-        static bool was_touched = false;
         uint8_t touch_count = 0;
-        if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) {
-            if (was_touched) {
-                was_touched = false;
-                return false; // Will trigger release state
-            }
-            return false;
-        }
-        
+        if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) return false;
         touch_count &= 0x0F;
-        if (touch_count == 0 || touch_count > 2) {
-            if (was_touched) {
-                was_touched = false;
-                return false; // Will trigger release state
-            }
-            return false;
-        }
+        if (touch_count == 0 || touch_count > 2) return false;
 
         uint8_t data[4];
-        if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) {
-            if (was_touched) {
-                was_touched = false;
-                return false; // Will trigger release state
-            }
-            return false;
-        }
+        if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) return false;
 
         uint16_t raw_x = ((data[0] & 0x0F) << 8) | data[1];
         uint16_t raw_y = ((data[2] & 0x0F) << 8) | data[3];
@@ -104,8 +83,7 @@ private:
         if (x >= 320) x = 319;
         if (y >= 240) y = 239;
 
-        was_touched = true;
-        ESP_LOGI(TAG, "Touch Physical: [%d,%d]", x, y);
+        ESP_LOGD(TAG, "Touch Physical: [%d,%d]", x, y);
         return true;
     }
 
@@ -114,7 +92,7 @@ private:
         i2c_device_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = FT6336_ADDR,
-            .scl_speed_hz = 100000,  // Reduced speed for better reliability
+            .scl_speed_hz = 400000,
         };
 
         if (i2c_master_bus_add_device(codec_i2c_bus_, &dev_cfg, &touch_dev_handle_) != ESP_OK) {
@@ -122,64 +100,36 @@ private:
             return;
         }
 
-        // Read chip ID to verify communication
         uint8_t chip_id;
         if (ReadTouchRegister(FT6336_FIRMWARE_ID, &chip_id, 1)) {
             ESP_LOGI(TAG, "Touch controller found. Chip ID: 0x%02X", chip_id);
             touch_initialized_ = true;
-        } else {
-            ESP_LOGE(TAG, "Failed to read touch controller ID");
-            return;
         }
 
-        // Read current configuration for debugging
-        uint8_t reg_val;
-        if (ReadTouchRegister(FT6336_DEVICE_MODE, &reg_val, 1)) {
-            ESP_LOGI(TAG, "Current device mode: 0x%02X", reg_val);
-        }
-        if (ReadTouchRegister(FT6336_TOUCH_THRESHOLD, &reg_val, 1)) {
-            ESP_LOGI(TAG, "Current touch threshold: 0x%02X", reg_val);
-        }
-
-        // Configure touch controller
-        WriteTouchRegister(FT6336_DEVICE_MODE, 0x00);  // Operating mode
-        WriteTouchRegister(FT6336_TOUCH_THRESHOLD, 0x0A);  // Lower threshold for better sensitivity
-        WriteTouchRegister(FT6336_CTRL, 0x00);  // Keep in normal mode
-        
-        // Add delay to ensure settings take effect
-        vTaskDelay(pdMS_TO_TICKS(100));
-        
-        ESP_LOGI(TAG, "Touch controller initialized");
+        WriteTouchRegister(FT6336_CTRL, 0x00);
+        WriteTouchRegister(FT6336_THRESHOLD, 0x14);
     }
 
+    // === TOUCH CALLBACK GỌN CHUẨN LVGL ===
     static void LvglTouchCb(lv_indev_t *indev, lv_indev_data_t *data) {
-        static bool last_touch_state = false;
-        auto *self = static_cast<FreenodeESP32S3Display *>(lv_indev_get_user_data(indev));
+        auto *self = (FreenoveESP32S3Display *)
+            lv_indev_get_user_data(indev);
+
         uint16_t x, y;
-        
-        bool current_touch_state = (self && self->ReadTouchPoint(x, y));
-        
-        if (current_touch_state) {
-            data->point.x = (lv_coord_t)x;
-            data->point.y = (lv_coord_t)y;
-            data->state = LV_INDEV_STATE_PRESSED;
-            ESP_LOGI(TAG, "LVGL Pressed: %d, %d", x, y);
-        } else if (last_touch_state) {
-            // Only send release state if we were previously pressed
-            data->state = LV_INDEV_STATE_RELEASED;
-            ESP_LOGI(TAG, "LVGL Released");
-        } else {
-            data->state = LV_INDEV_STATE_RELEASED;
+        if (self && self->ReadTouchPoint(x, y)) {
+                data->state = LV_INDEV_STATE_PRESSED;
+            data->point.x = x;
+            data->point.y = y;
+            } else {
+                data->state = LV_INDEV_STATE_RELEASED;
+            }
         }
-        
-        last_touch_state = current_touch_state;
-    }
 
     static void OnDisplayClicked(lv_event_t *e) {
-        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-            ESP_LOGI(TAG, ">>>> DISPLAY CLICKED - TOGGLE CHAT <<<<");
-            Application::GetInstance().ToggleChatState();
-        }
+
+        ESP_LOGI(TAG, ">>>> DISPLAY CLICKED - TOGGLE CHAT <<<<");
+        Application::GetInstance().ToggleChatState();
+
     }
 
     void InitializeSpi() {
@@ -293,14 +243,22 @@ public:
             lvgl_port_lock(0);
 
             lv_indev_t *indev = lv_indev_create();
-                lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-                lv_indev_set_read_cb(indev, LvglTouchCb);
-                lv_indev_set_user_data(indev, this);
+            lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+            lv_indev_set_read_cb(indev, LvglTouchCb);
+            lv_indev_set_user_data(indev, this);
 
 
-            lv_obj_t *scr = lv_screen_active();
-                lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-                lv_obj_add_event_cb(scr, OnDisplayClicked, LV_EVENT_CLICKED, nullptr);
+            lv_obj_t *content = display_->GetContentObject();
+
+            lv_obj_add_flag(content, LV_OBJ_FLAG_CLICKABLE);
+
+            lv_obj_add_event_cb(
+                content,
+                OnDisplayClicked,
+                LV_EVENT_CLICKED,
+                nullptr
+            );
+
 
             lvgl_port_unlock();
         }
