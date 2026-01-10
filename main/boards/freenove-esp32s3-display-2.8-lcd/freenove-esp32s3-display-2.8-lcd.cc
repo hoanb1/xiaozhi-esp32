@@ -29,7 +29,7 @@
 
 #define TAG "FreenoveESP32S3Display"
 
-LV_FONT_DECLARE(font_viet_16);
+LV_FONT_DECLARE(font_viet_20);
 LV_FONT_DECLARE(font_awesome_16_4);
 
 class FreenoveESP32S3Display : public WifiBoard {
@@ -185,7 +185,7 @@ private:
                                      DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
                                      DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
                                      {
-                                         .text_font = &font_viet_16,
+                                         .text_font = &font_viet_20,
                                          .icon_font = &font_awesome_16_4,
                                          .emoji_font = DISPLAY_HEIGHT >= 240
                                                            ? font_emoji_64_init()

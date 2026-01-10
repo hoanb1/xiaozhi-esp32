@@ -13,6 +13,7 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "audio_debugger.h"
+#include "freertos/task.h" // Thêm thư viện này để dùng vTaskDelay
 
 #if CONFIG_USE_AUDIO_PROCESSOR
 #include "afe_audio_processor.h"
@@ -349,12 +350,20 @@ void Application::ToggleChatState() {
             // Đặt cờ Realtime để Watchdog có thể hỗ trợ nếu rớt mạng
             listening_mode_ = kListeningModeRealtime;
             Schedule([this]() {
+                // QUAN TRỌNG: Mở kênh TRƯỚC khi gửi WakeWord
                 if (!protocol_->IsAudioChannelOpened()) {
                     SetDeviceState(kDeviceStateConnecting);
                     if (!protocol_->OpenAudioChannel()) {
+                         SetDeviceState(kDeviceStateIdle);
                         return;
                     }
                 }
+
+                // Gửi Wake Word giả lập sau khi kênh đã mở
+                /*if (protocol_) {
+                    protocol_->SendWakeWordDetected("button_trigger");
+                }*/
+
                 SetDeviceState(kDeviceStateListening);
             });
         }
@@ -615,8 +624,8 @@ void Application::Start() {
     display->UpdateStatusBar(true);
 
     // Check for new firmware version or get the MQTT broker address
-    //  Ota ota;
-    //CheckNewVersion(ota);
+    Ota ota;
+    CheckNewVersion(ota);
 
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
@@ -789,7 +798,7 @@ void Application::Start() {
                     protocol_->SendAudio(packet);
                 }
                 // Set the chat state to wake word detected
-                protocol_->SendWakeWordDetected(wake_word);
+              //  protocol_->SendWakeWordDetected(wake_word);
 #else
                 // Play the pop up sound to indicate the wake word is detected
                 // And wait 60ms to make sure the queue has been processed by audio task
@@ -834,6 +843,8 @@ void Application::OnClockTimer() {
     auto display = Board::GetInstance().GetDisplay();
     display->UpdateStatusBar();
 
+    // DISABLE STT WATCHDOG as requested
+    /*
     // STT Watchdog: Force restart listening if stuck in IDLE mode while STT_ONLY is enabled
     // Only restart if we are NOT in "Manual Stop" mode (user pressed button to pause or server sent Goodbye)
     if (stt_only_mode_ && device_state_ == kDeviceStateIdle) {
@@ -854,6 +865,7 @@ void Application::OnClockTimer() {
             }
         }
     }
+    */
 
     // Print the debug info every 10 seconds
     if (clock_ticks_ % 10 == 0) {
@@ -1227,11 +1239,11 @@ void Application::Reboot() {
 void Application::WakeWordInvoke(const std::string &wake_word) {
     if (device_state_ == kDeviceStateIdle) {
         ToggleChatState();
-        Schedule([this, wake_word]() {
+        /*Schedule([this, wake_word]() {
             if (protocol_) {
                 protocol_->SendWakeWordDetected(wake_word);
             }
-        });
+        });*/
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);
@@ -1305,10 +1317,26 @@ void Application::SetSttOnlyMode(bool enable) {
 
     if (enable) {
         Schedule([this]() {
-            // When enabling STT Mode, if idle or speaking, start listening immediately
-            if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateSpeaking) {
-                SetDeviceState(kDeviceStateListening);
+            // DELAY trước khi bắt đầu để ổn định hệ thống và tránh tiếng ồn nút bấm
+            vTaskDelay(pdMS_TO_TICKS(600));
+
+            // QUAN TRỌNG: Mở kênh TRƯỚC khi gửi WakeWord
+            if (!protocol_->IsAudioChannelOpened()) {
+                SetDeviceState(kDeviceStateConnecting);
+                if (!protocol_->OpenAudioChannel()) {
+                     SetDeviceState(kDeviceStateIdle);
+                     return;
+                }
             }
+
+            // Gửi Wake Word giả lập sau khi kênh đã mở
+            /*
+            if (protocol_) {
+                protocol_->SendWakeWordDetected("button_trigger");
+            }
+            */
+
+                SetDeviceState(kDeviceStateListening);
         });
     } else {
         Schedule([this]() {
