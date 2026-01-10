@@ -26,7 +26,6 @@
 #include <driver/i2c.h>
 
 
-
 #define TAG "FreenoveESP32S3Display"
 
 LV_FONT_DECLARE(font_viet_20);
@@ -48,7 +47,7 @@ private:
 
     bool ReadTouchRegister(uint8_t reg, uint8_t *data, size_t len) {
         if (!touch_initialized_ && reg != FT6336_FIRMWARE_ID) return false;
-        
+
         esp_err_t ret = i2c_master_transmit_receive(
             touch_dev_handle_,
             &reg, 1,
@@ -124,18 +123,18 @@ private:
             uint16_t x, y;
             if (ReadTouchPoint(x, y)) {
                 if (!was_touched) {
-                uint32_t now = esp_log_timestamp();
-                if ((now - last_touch_time) > debounce_time) {
+                    uint32_t now = esp_log_timestamp();
+                    if ((now - last_touch_time) > debounce_time) {
                         ESP_LOGI(TAG, "Touch detected! Toggle chat state.");
-                    auto &app = Application::GetInstance();
+                        auto &app = Application::GetInstance();
                         // Nếu đang STT Mode thì không dùng cảm ứng để toggle tránh loạn
                         if (!stt_only_active_) {
-                    app.ToggleChatState();
+                            app.ToggleChatState();
                         }
-                    last_touch_time = now;
-                }
+                        last_touch_time = now;
+                    }
                     was_touched = true;
-            }
+                }
             } else {
                 was_touched = false;
             }
@@ -208,32 +207,37 @@ private:
     }
 
     void InitializeButtons() {
+        // 1. Nhấn đơn (Single Click): Toggle Chat/Idle
         boot_button_.OnClick([this]() {
             auto &app = Application::GetInstance();
-
-            // Nếu thiết bị đang khởi động và chưa kết nối wifi thì reset cấu hình wifi
             if (app.GetDeviceState() == kDeviceStateStarting &&
                 !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
                 return;
             }
-
-            // Bấm một cái: Toggle trạng thái nghe/nghỉ (bất kể đang ở mode nào)
-            // Đã xóa logic thoát chế độ STT Only ở đây.
-            ESP_LOGI(TAG, "Boot button clicked. Toggling chat state...");
+            ESP_LOGI(TAG, "Single Click: Toggle chat state");
             app.ToggleChatState();
         });
 
+        // 2. Nhấn giữ (Long Press): Chuyển chế độ STT Only
         boot_button_.OnLongPress([this]() {
             auto &app = Application::GetInstance();
-
-            // Đảo trạng thái chế độ STT Only
             stt_only_active_ = !stt_only_active_;
-
-            ESP_LOGI(TAG, "Long press: Switching Mode. STT Only Active: %d", stt_only_active_);
-
-            // Chỉ chuyển đổi chế độ, Application sẽ tự quyết định trạng thái Listening phù hợp
+            ESP_LOGI(TAG, "Long Press: STT Only Mode %s", stt_only_active_ ? "ON" : "OFF");
             app.SetSttOnlyMode(stt_only_active_);
+        });
+
+        // 3. Nhấn đúp (Double Click): Test Mic
+        // Lưu ý: Nếu báo lỗi 'OnDoubleClick' không tồn tại, hãy dùng Cách 2 bên dưới
+        boot_button_.OnDoubleClick([this]() {
+            auto &app = Application::GetInstance();
+            ESP_LOGI(TAG, "Double Click: Toggle Audio Testing");
+
+            if (app.GetDeviceState() == kDeviceStateAudioTesting) {
+                app.ExitAudioTestingMode();
+            } else {
+                app.EnterAudioTestingMode();
+            }
         });
     }
 
@@ -246,17 +250,17 @@ public:
         InitializeTouch();
 
         xTaskCreate(
-            [](void *arg) { static_cast<FreenoveESP32S3Display*>(arg)->TouchTask(arg); },
+            [](void *arg) { static_cast<FreenoveESP32S3Display *>(arg)->TouchTask(arg); },
             "touch_task",
             4096,
             this,
             5,
             &touch_task_handle_
         );
-        
+
         GetBacklight()->SetBrightness(100);
     }
-    
+
     ~FreenoveESP32S3Display() {
         if (touch_task_handle_ != nullptr) {
             vTaskDelete(touch_task_handle_);
@@ -337,7 +341,7 @@ public:
                     last_charging_state_ = false;
                 }
 
-                    if (real_voltage_mv >= 4150) level = 100;
+                if (real_voltage_mv >= 4150) level = 100;
                 else if (real_voltage_mv <= 3500) level = 0;
                 else level = (real_voltage_mv - 3500) / 6.5;
 

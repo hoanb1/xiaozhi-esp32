@@ -22,7 +22,7 @@ McpServer::McpServer() {
 }
 
 McpServer::~McpServer() {
-    for (auto tool : tools_) {
+    for (auto tool: tools_) {
         delete tool;
     }
     tools_.clear();
@@ -33,83 +33,108 @@ void McpServer::AddCommonTools() {
     // the tools list to utilize the prompt cache.
     // Backup the original tools list and restore it after adding the common tools.
     auto original_tools = std::move(tools_);
-    auto& board = Board::GetInstance();
+    auto &board = Board::GetInstance();
 
     AddTool("self.get_device_status",
-        "Provides the real-time information of the device, including the current status of the audio speaker, screen, battery, network, etc.\n"
-        "Use this tool for: \n"
-        "1. Answering questions about current condition (e.g. what is the current volume of the audio speaker?)\n"
-        "2. As the first step to control the device (e.g. turn up / down the volume of the audio speaker, etc.)",
-        PropertyList(),
-        [&board](const PropertyList& properties) -> ReturnValue {
-            return board.GetDeviceStatusJson();
-        });
+            "Provides the real-time information of the device, including the current status of the audio speaker, screen, battery, network, etc.\n"
+            "Use this tool for: \n"
+            "1. Answering questions about current condition (e.g. what is the current volume of the audio speaker?)\n"
+            "2. As the first step to control the device (e.g. turn up / down the volume of the audio speaker, etc.)",
+            PropertyList(),
+            [&board](const PropertyList &properties) -> ReturnValue {
+                return board.GetDeviceStatusJson();
+            });
 
-    AddTool("self.audio_speaker.set_volume", 
-        "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
-        PropertyList({
-            Property("volume", kPropertyTypeInteger, 0, 100)
-        }), 
-        [&board](const PropertyList& properties) -> ReturnValue {
-            auto codec = board.GetAudioCodec();
-            codec->SetOutputVolume(properties["volume"].value<int>());
-            return true;
-        });
-    
+    AddTool("self.audio_speaker.set_volume",
+            "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
+            PropertyList({
+                Property("volume", kPropertyTypeInteger, 0, 100)
+            }),
+            [&board](const PropertyList &properties) -> ReturnValue {
+                auto codec = board.GetAudioCodec();
+                codec->SetOutputVolume(properties["volume"].value<int>());
+                return true;
+            });
+
+    AddTool("self.microphone.set_gain",
+            "Set the microphone gain (sensitivity). Range 0-100. Higher value means more sensitive.",
+            PropertyList({
+                Property("gain", kPropertyTypeInteger, 0, 100)
+            }),
+            [&board](const PropertyList &properties) -> ReturnValue {
+                auto codec = board.GetAudioCodec();
+                // Lưu ý: Cần đảm bảo AudioCodec đã có hàm SetMicGain (xem bước 2)
+                codec->SetMicGain(properties["gain"].value<int>());
+                return true;
+            });
+    AddTool("self.hearing_aid.set_mode",
+         "Enable or disable Hearing Aid mode (also known as STT Only Mode or Subtitle Mode). \n" // Thêm keyword
+         "When enabled, the device continuously listens and displays text on the screen without speaking back (No TTS).\n"
+         "Use this tool when user says: 'bật chế độ trợ thính', 'hiện phụ đề', 'không nghe rõ', 'disable tts', 'turn on hearing aid'.", // Thêm ví dụ tiếng Việt
+         PropertyList({
+             Property("enable", kPropertyTypeBoolean)
+         }),
+         [](const PropertyList& properties) -> ReturnValue {
+             bool enable = properties["enable"].value<bool>();
+             Application::GetInstance().SetSttOnlyMode(enable);
+             return true;
+         });
+    // -----------------------------------------------------
     auto backlight = board.GetBacklight();
     if (backlight) {
         AddTool("self.screen.set_brightness",
-            "Set the brightness of the screen.",
-            PropertyList({
-                Property("brightness", kPropertyTypeInteger, 0, 100)
-            }),
-            [backlight](const PropertyList& properties) -> ReturnValue {
-                uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
-                backlight->SetBrightness(brightness, true);
-                return true;
-            });
+                "Set the brightness of the screen.",
+                PropertyList({
+                    Property("brightness", kPropertyTypeInteger, 0, 100)
+                }),
+                [backlight](const PropertyList &properties) -> ReturnValue {
+                    uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
+                    backlight->SetBrightness(brightness, true);
+                    return true;
+                });
     }
 
     auto display = board.GetDisplay();
     if (display && !display->GetTheme().empty()) {
         AddTool("self.screen.set_theme",
-            "Set the theme of the screen. The theme can be `light` or `dark`.",
-            PropertyList({
-                Property("theme", kPropertyTypeString)
-            }),
-            [display](const PropertyList& properties) -> ReturnValue {
-                display->SetTheme(properties["theme"].value<std::string>().c_str());
-                return true;
-            });
+                "Set the theme of the screen. The theme can be `light` or `dark`.",
+                PropertyList({
+                    Property("theme", kPropertyTypeString)
+                }),
+                [display](const PropertyList &properties) -> ReturnValue {
+                    display->SetTheme(properties["theme"].value<std::string>().c_str());
+                    return true;
+                });
     }
 
     auto camera = board.GetCamera();
     if (camera) {
         AddTool("self.camera.take_photo",
-            "Take a photo and explain it. Use this tool after the user asks you to see something.\n"
-            "Args:\n"
-            "  `question`: The question that you want to ask about the photo.\n"
-            "Return:\n"
-            "  A JSON object that provides the photo information.",
-            PropertyList({
-                Property("question", kPropertyTypeString)
-            }),
-            [camera](const PropertyList& properties) -> ReturnValue {
-                if (!camera->Capture()) {
-                    return "{\"success\": false, \"message\": \"Failed to capture photo\"}";
-                }
-                auto question = properties["question"].value<std::string>();
-                return camera->Explain(question);
-            });
+                "Take a photo and explain it. Use this tool after the user asks you to see something.\n"
+                "Args:\n"
+                "  `question`: The question that you want to ask about the photo.\n"
+                "Return:\n"
+                "  A JSON object that provides the photo information.",
+                PropertyList({
+                    Property("question", kPropertyTypeString)
+                }),
+                [camera](const PropertyList &properties) -> ReturnValue {
+                    if (!camera->Capture()) {
+                        return "{\"success\": false, \"message\": \"Failed to capture photo\"}";
+                    }
+                    auto question = properties["question"].value<std::string>();
+                    return camera->Explain(question);
+                });
     }
 
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());
 }
 
-void McpServer::AddTool(McpTool* tool) {
+void McpServer::AddTool(McpTool *tool) {
     // Prevent adding duplicate tools
-    if (std::find_if(tools_.begin(), tools_.end(), [tool](const McpTool* t) { return t->name() == tool->name(); }) != tools_.end()) {
+    if (std::find_if(tools_.begin(), tools_.end(), [tool](const McpTool *t) { return t->name() == tool->name(); }) !=
+        tools_.end()) {
         ESP_LOGW(TAG, "Tool %s already added", tool->name().c_str());
         return;
     }
@@ -118,12 +143,13 @@ void McpServer::AddTool(McpTool* tool) {
     tools_.push_back(tool);
 }
 
-void McpServer::AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback) {
+void McpServer::AddTool(const std::string &name, const std::string &description, const PropertyList &properties,
+                        std::function<ReturnValue(const PropertyList &)> callback) {
     AddTool(new McpTool(name, description, properties, callback));
 }
 
-void McpServer::ParseMessage(const std::string& message) {
-    cJSON* json = cJSON_Parse(message.c_str());
+void McpServer::ParseMessage(const std::string &message) {
+    cJSON *json = cJSON_Parse(message.c_str());
     if (json == nullptr) {
         ESP_LOGE(TAG, "Failed to parse MCP message: %s", message.c_str());
         return;
@@ -132,7 +158,7 @@ void McpServer::ParseMessage(const std::string& message) {
     cJSON_Delete(json);
 }
 
-void McpServer::ParseCapabilities(const cJSON* capabilities) {
+void McpServer::ParseCapabilities(const cJSON *capabilities) {
     auto vision = cJSON_GetObjectItem(capabilities, "vision");
     if (cJSON_IsObject(vision)) {
         auto url = cJSON_GetObjectItem(vision, "url");
@@ -151,26 +177,26 @@ void McpServer::ParseCapabilities(const cJSON* capabilities) {
     }
 }
 
-void McpServer::ParseMessage(const cJSON* json) {
+void McpServer::ParseMessage(const cJSON *json) {
     // Check JSONRPC version
     auto version = cJSON_GetObjectItem(json, "jsonrpc");
     if (version == nullptr || !cJSON_IsString(version) || strcmp(version->valuestring, "2.0") != 0) {
         ESP_LOGE(TAG, "Invalid JSONRPC version: %s", version ? version->valuestring : "null");
         return;
     }
-    
+
     // Check method
     auto method = cJSON_GetObjectItem(json, "method");
     if (method == nullptr || !cJSON_IsString(method)) {
         ESP_LOGE(TAG, "Missing method");
         return;
     }
-    
+
     auto method_str = std::string(method->valuestring);
     if (method_str.find("notifications") == 0) {
         return;
     }
-    
+
     // Check params
     auto params = cJSON_GetObjectItem(json, "params");
     if (params != nullptr && !cJSON_IsObject(params)) {
@@ -184,7 +210,7 @@ void McpServer::ParseMessage(const cJSON* json) {
         return;
     }
     auto id_int = id->valueint;
-    
+
     if (method_str == "initialize") {
         if (cJSON_IsObject(params)) {
             auto capabilities = cJSON_GetObjectItem(params, "capabilities");
@@ -193,7 +219,9 @@ void McpServer::ParseMessage(const cJSON* json) {
             }
         }
         auto app_desc = esp_app_get_description();
-        std::string message = "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"" BOARD_NAME "\",\"version\":\"";
+        std::string message =
+                "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\""
+                BOARD_NAME "\",\"version\":\"";
         message += app_desc->version;
         message += "\"}}";
         ReplyResult(id_int, message);
@@ -230,14 +258,15 @@ void McpServer::ParseMessage(const cJSON* json) {
             ReplyError(id_int, "Invalid stackSize");
             return;
         }
-        DoToolCall(id_int, std::string(tool_name->valuestring), tool_arguments, stack_size ? stack_size->valueint : DEFAULT_TOOLCALL_STACK_SIZE);
+        DoToolCall(id_int, std::string(tool_name->valuestring), tool_arguments,
+                   stack_size ? stack_size->valueint : DEFAULT_TOOLCALL_STACK_SIZE);
     } else {
         ESP_LOGE(TAG, "Method not implemented: %s", method_str.c_str());
         ReplyError(id_int, "Method not implemented: " + method_str);
     }
 }
 
-void McpServer::ReplyResult(int id, const std::string& result) {
+void McpServer::ReplyResult(int id, const std::string &result) {
     std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
     payload += std::to_string(id) + ",\"result\":";
     payload += result;
@@ -245,7 +274,7 @@ void McpServer::ReplyResult(int id, const std::string& result) {
     Application::GetInstance().SendMcpMessage(payload);
 }
 
-void McpServer::ReplyError(int id, const std::string& message) {
+void McpServer::ReplyError(int id, const std::string &message) {
     std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
     payload += std::to_string(id);
     payload += ",\"error\":{\"message\":\"";
@@ -254,14 +283,14 @@ void McpServer::ReplyError(int id, const std::string& message) {
     Application::GetInstance().SendMcpMessage(payload);
 }
 
-void McpServer::GetToolsList(int id, const std::string& cursor) {
+void McpServer::GetToolsList(int id, const std::string &cursor) {
     const int max_payload_size = 8000;
     std::string json = "{\"tools\":[";
-    
+
     bool found_cursor = cursor.empty();
     auto it = tools_.begin();
     std::string next_cursor = "";
-    
+
     while (it != tools_.end()) {
         // 如果我们还没有找到起始位置，继续搜索
         if (!found_cursor) {
@@ -272,7 +301,7 @@ void McpServer::GetToolsList(int id, const std::string& cursor) {
                 continue;
             }
         }
-        
+
         // 添加tool前检查大小
         std::string tool_json = (*it)->to_json() + ",";
         if (json.length() + tool_json.length() + 30 > max_payload_size) {
@@ -280,15 +309,15 @@ void McpServer::GetToolsList(int id, const std::string& cursor) {
             next_cursor = (*it)->name();
             break;
         }
-        
+
         json += tool_json;
         ++it;
     }
-    
+
     if (json.back() == ',') {
         json.pop_back();
     }
-    
+
     if (json.back() == '[' && !tools_.empty()) {
         // 如果没有添加任何tool，返回错误
         ESP_LOGE(TAG, "tools/list: Failed to add tool %s because of payload size limit", next_cursor.c_str());
@@ -301,16 +330,16 @@ void McpServer::GetToolsList(int id, const std::string& cursor) {
     } else {
         json += "],\"nextCursor\":\"" + next_cursor + "\"}";
     }
-    
+
     ReplyResult(id, json);
 }
 
-void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments, int stack_size) {
-    auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
-                                 [&tool_name](const McpTool* tool) { 
-                                     return tool->name() == tool_name; 
-                                 });
-    
+void McpServer::DoToolCall(int id, const std::string &tool_name, const cJSON *tool_arguments, int stack_size) {
+    auto tool_iter = std::find_if(tools_.begin(), tools_.end(),
+                                  [&tool_name](const McpTool *tool) {
+                                      return tool->name() == tool_name;
+                                  });
+
     if (tool_iter == tools_.end()) {
         ESP_LOGE(TAG, "tools/call: Unknown tool: %s", tool_name.c_str());
         ReplyError(id, "Unknown tool: " + tool_name);
@@ -319,7 +348,7 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
 
     PropertyList arguments = (*tool_iter)->properties();
     try {
-        for (auto& argument : arguments) {
+        for (auto &argument: arguments) {
             bool found = false;
             if (cJSON_IsObject(tool_arguments)) {
                 auto value = cJSON_GetObjectItem(tool_arguments, argument.name().c_str());
@@ -341,7 +370,7 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
                 return;
             }
         }
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         ESP_LOGE(TAG, "tools/call: %s", e.what());
         ReplyError(id, e.what());
         return;
@@ -358,7 +387,7 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
     tool_call_thread_ = std::thread([this, id, tool_iter, arguments = std::move(arguments)]() {
         try {
             ReplyResult(id, (*tool_iter)->Call(arguments));
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             ESP_LOGE(TAG, "tools/call: %s", e.what());
             ReplyError(id, e.what());
         }

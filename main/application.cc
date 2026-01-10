@@ -14,6 +14,7 @@
 #include "mcp_server.h"
 #include "audio_debugger.h"
 #include "freertos/task.h" // Thêm thư viện này để dùng vTaskDelay
+#include <esp_sleep.h>     // Thêm thư viện Deep Sleep
 
 #if CONFIG_USE_AUDIO_PROCESSOR
 #include "afe_audio_processor.h"
@@ -37,6 +38,11 @@
 
 #define TAG "Application"
 
+// --- CẤU HÌNH THỜI GIAN TIẾT KIỆM PIN ---
+// Sau 2 phút: Tắt màn hình (Vẫn nhận diện giọng nói - Voice Wakeup OK)
+#define BATTERY_SAVE_DIM_TIMEOUT 60
+// Sau 5 phút: Ngủ sâu (Chỉ nhận diện nút bấm - Button Wakeup Only)
+#define BATTERY_SAVE_SLEEP_TIMEOUT 300
 
 static const char *const STATE_STRINGS[] = {
     "unknown",
@@ -56,6 +62,9 @@ static const char *const STATE_STRINGS[] = {
 Application::Application() {
     event_group_ = xEventGroupCreate();
     background_task_ = new BackgroundTask(4096 * 7);
+
+    // Mặc định tắt chế độ tiết kiệm pin lúc khởi động để tránh ngủ ngay lập tức
+    battery_save_mode_ = false;
 
 #if CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
@@ -359,11 +368,6 @@ void Application::ToggleChatState() {
                     }
                 }
 
-                // Gửi Wake Word giả lập sau khi kênh đã mở
-                /*if (protocol_) {
-                    protocol_->SendWakeWordDetected("button_trigger");
-                }*/
-
                 SetDeviceState(kDeviceStateListening);
             });
         }
@@ -460,7 +464,7 @@ void Application::HandleSttMode(const cJSON *root) {
     auto display = Board::GetInstance().GetDisplay();
     auto type = cJSON_GetObjectItem(root, "type");
 
-    // 1. Handle STT (Text display)
+    // 1. Handle STT
     if (strcmp(type->valuestring, "stt") == 0) {
         auto text = cJSON_GetObjectItem(root, "text");
         if (cJSON_IsString(text)) {
@@ -470,13 +474,11 @@ void Application::HandleSttMode(const cJSON *root) {
             });
         }
     }
-    // 2. Handle TTS (Loop control only if restart is desired)
+    // 2. Handle TTS
     else if (strcmp(type->valuestring, "tts") == 0) {
         auto state = cJSON_GetObjectItem(root, "state");
         if (state && strcmp(state->valuestring, "stop") == 0) {
-            // Note: If server sends Goodbye, this might not trigger,
-            // relying on OnAudioChannelClosed for the "Goodbye" event.
-            // If you still want loop here, keep it, but "Goodbye" takes precedence in network event.
+             // Logic dừng nếu cần
         }
     }
     // 3. Handle System Commands
@@ -486,6 +488,18 @@ void Application::HandleSttMode(const cJSON *root) {
             Schedule([this]() { Reboot(); });
         }
     }
+
+    // --- BỔ SUNG QUAN TRỌNG: XỬ LÝ MCP TRONG CHẾ ĐỘ STT ---
+#if CONFIG_IOT_PROTOCOL_MCP
+    else if (strcmp(type->valuestring, "mcp") == 0) {
+        auto payload = cJSON_GetObjectItem(root, "payload");
+        if (cJSON_IsObject(payload)) {
+            ESP_LOGI(TAG, "STT Mode received MCP Command");
+            McpServer::GetInstance().ParseMessage(payload);
+        }
+    }
+#endif
+    // -----------------------------------------------------
 }
 
 void Application::HandleNormalMode(const cJSON *root) {
@@ -568,6 +582,9 @@ void Application::HandleNormalMode(const cJSON *root) {
         if (cJSON_IsString(status) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
             Alert(status->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::P3_VIBRATION);
         }
+    } else if (strcmp(type->valuestring, "battery_save") == 0) {
+        bool enable = cJSON_IsTrue(cJSON_GetObjectItem(root, "enable"));
+        SetBatterySaverMode(enable);
     }
 }
 
@@ -625,7 +642,7 @@ void Application::Start() {
 
     // Check for new firmware version or get the MQTT broker address
     Ota ota;
-    CheckNewVersion(ota);
+    // CheckNewVersion(ota); // Disabled for faster boot
 
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
@@ -660,6 +677,7 @@ void Application::Start() {
         }
     });
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
+        // Wakeup screen on new session
         board.SetPowerSaveMode(false);
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(
@@ -682,23 +700,18 @@ void Application::Start() {
     // FIX: LOGIC KHI KẾT THÚC SESSION (GOODBYE)
     // -------------------------------------------------------------
     protocol_->OnAudioChannelClosed([this, &board]() {
-        board.SetPowerSaveMode(true);
+        // NOTE: We do NOT force power save here immediately.
+        // We let the idle timer handle the dimming to avoid screen flickering off too fast.
+        // board.SetPowerSaveMode(true);
+
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
 
             if (stt_only_mode_) {
                 // Khi Server gửi Goodbye (Session Closed):
                 ESP_LOGI(TAG, "STT Mode: Server sent Goodbye. Stopping.");
-
-                // 1. Dừng nghe về Idle
                 SetDeviceState(kDeviceStateIdle);
-
-                // 2. QUAN TRỌNG: Đánh dấu ManualStop để Watchdog KHÔNG tự bật lại
                 listening_mode_ = kListeningModeManualStop;
-
-                // 3. Thông báo lên màn hình để user biết
-                display->SetChatMessage("system", "Session Ended. Press Boot to Start.");
-                display->SetStatus("PAUSED");
             } else {
                 SetDeviceState(kDeviceStateIdle);
                 display->SetChatMessage("system", "");
@@ -817,13 +830,13 @@ void Application::Start() {
     wake_word_->StartDetection();
 
     // Wait for the new version check to finish
-    xEventGroupWaitBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT, pdTRUE, pdFALSE, portMAX_DELAY);
+    // xEventGroupWaitBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT, pdTRUE, pdFALSE, portMAX_DELAY); // Disabled since check is skipped
     SetDeviceState(kDeviceStateIdle);
 
     has_server_time_ = ota.HasServerTime();
     if (protocol_started) {
-        std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
-        display->ShowNotification(message.c_str());
+       // std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
+       // display->ShowNotification(message.c_str());
         display->SetChatMessage("system", "");
         // Play the success sound to indicate the device is ready
         ResetDecoder();
@@ -841,31 +854,29 @@ void Application::OnClockTimer() {
     clock_ticks_++;
 
     auto display = Board::GetInstance().GetDisplay();
-    display->UpdateStatusBar();
-
-    // DISABLE STT WATCHDOG as requested
-    /*
-    // STT Watchdog: Force restart listening if stuck in IDLE mode while STT_ONLY is enabled
-    // Only restart if we are NOT in "Manual Stop" mode (user pressed button to pause or server sent Goodbye)
-    if (stt_only_mode_ && device_state_ == kDeviceStateIdle) {
-        if (listening_mode_ != kListeningModeManualStop) {
-            // Check if user PAUSED it
-            if (clock_ticks_ % 2 == 0) {
-                // Check frequently
-                ESP_LOGI(TAG, "STT Watchdog: Device idle & should be running. Restarting...");
-                Schedule([this]() {
-                    if (device_state_ == kDeviceStateIdle) {
-                        // Check if we need to reopen the channel
-                        if (protocol_ && !protocol_->IsAudioChannelOpened()) {
-                            protocol_->OpenAudioChannel();
-                        }
-                        SetDeviceState(kDeviceStateListening);
-                    }
-                });
-            }
+    // Battery Saver Logic: Reduce display refresh rate in Idle
+    if (battery_save_mode_ && device_state_ == kDeviceStateIdle) {
+        // Slow refresh rate
+        if (clock_ticks_ % 5 == 0) {
+             display->UpdateStatusBar();
         }
-    }
-    */
+
+        // Auto Dim (Low power) - 2 minutes
+        // TRONG GIAI ĐOẠN NÀY: Màn hình tắt, nhưng VOICE WAKEUP VẪN HOẠT ĐỘNG
+        if (clock_ticks_ == BATTERY_SAVE_DIM_TIMEOUT) {
+            ESP_LOGI(TAG, "Auto-dimming screen due to inactivity");
+            Board::GetInstance().SetPowerSaveMode(true);
+        }
+
+        // Auto Deep Sleep - 5 minutes
+        // GIAI ĐOẠN NÀY: Tắt CPU -> CHỈ CÓ THỂ WAKEUP BẰNG NÚT BẤM
+        if (clock_ticks_ >= BATTERY_SAVE_SLEEP_TIMEOUT) {
+            EnterDeepSleep();
+        }
+
+    } else {
+    display->UpdateStatusBar();
+        }
 
     // Print the debug info every 10 seconds
     if (clock_ticks_ % 10 == 0) {
@@ -1115,9 +1126,13 @@ void Application::SetDeviceState(DeviceState state) {
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
 
-    // OPTIMIZATION: Only wait for background task if NOT in STT Only mode.
-    // Waiting in STT mode is unnecessary as no audio output is required.
-    // This reduces dead time between sentences significantly.
+    // Restore power (brightness) when active
+    // FIX: Do not call SetPowerSaveMode during 'starting' as WiFi is not init yet
+    if (state != kDeviceStateIdle && state != kDeviceStateUnknown && state != kDeviceStateStarting) {
+        Board::GetInstance().SetPowerSaveMode(false);
+    }
+
+    // OPTIMIZATION: Only wait for background task if NOT in STT only mode.
     if (!stt_only_mode_) {
         background_task_->WaitForCompletion();
     }
@@ -1239,11 +1254,6 @@ void Application::Reboot() {
 void Application::WakeWordInvoke(const std::string &wake_word) {
     if (device_state_ == kDeviceStateIdle) {
         ToggleChatState();
-        /*Schedule([this, wake_word]() {
-            if (protocol_) {
-                protocol_->SendWakeWordDetected(wake_word);
-            }
-        });*/
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);
@@ -1329,13 +1339,6 @@ void Application::SetSttOnlyMode(bool enable) {
                 }
             }
 
-            // Gửi Wake Word giả lập sau khi kênh đã mở
-            /*
-            if (protocol_) {
-                protocol_->SendWakeWordDetected("button_trigger");
-            }
-            */
-
                 SetDeviceState(kDeviceStateListening);
         });
     } else {
@@ -1343,4 +1346,30 @@ void Application::SetSttOnlyMode(bool enable) {
             SetDeviceState(kDeviceStateIdle);
         });
     }
+}
+
+void Application::SetBatterySaverMode(bool enable) {
+    battery_save_mode_ = enable;
+    ESP_LOGI(TAG, "Battery save mode: %d", enable);
+    // Apply immediate effect if enabling and already idle
+    if (enable && device_state_ == kDeviceStateIdle) {
+        Board::GetInstance().SetPowerSaveMode(true);
+    } else {
+        Board::GetInstance().SetPowerSaveMode(false);
+    }
+}
+
+void Application::EnterDeepSleep() {
+    ESP_LOGI(TAG, "Entering Deep Sleep (Wakeup: Button GPIO0)...");
+    Board::GetInstance().GetDisplay()->SetStatus("Deep Sleep");
+
+    // Đợi một chút để UI kịp cập nhật
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    // Cấu hình nút BOOT (GPIO 0) để đánh thức từ Deep Sleep
+    // 0 = Low level (khi nhấn nút thì GPIO 0 về mức thấp)
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
+
+    // Bắt đầu ngủ sâu (CPU tắt, Mic tắt -> Không dùng Voice được ở giai đoạn này)
+    esp_deep_sleep_start();
 }

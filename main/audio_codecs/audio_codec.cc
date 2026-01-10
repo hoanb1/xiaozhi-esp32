@@ -34,6 +34,13 @@ void AudioCodec::Start() {
         output_volume_ = 10;
     }
 
+    // --- MỚI THÊM: Load Mic Gain từ Settings ---
+    mic_gain_ = settings.GetInt("mic_gain", AUDIO_CODEC_DEFAULT_MIC_GAIN);
+    ESP_LOGI(TAG, "Loaded mic gain: %d", mic_gain_);
+    // Lưu ý: Việc áp dụng mic_gain_ xuống phần cứng (Set Hardware Gain)
+    // sẽ được thực hiện bởi lớp con (ví dụ Es8311AudioCodec) trong hàm UpdateDeviceState() hoặc override Start()
+    // ------------------------------------------
+
     ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
     ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
 
@@ -49,6 +56,16 @@ void AudioCodec::SetOutputVolume(int volume) {
     Settings settings("audio", true);
     settings.SetInt("output_volume", output_volume_);
 }
+
+// --- MỚI THÊM ---
+void AudioCodec::SetMicGain(int gain) {
+    mic_gain_ = gain;
+    ESP_LOGI(TAG, "Set mic gain to %d", mic_gain_);
+
+    Settings settings("audio", true);
+    settings.SetInt("mic_gain", mic_gain_);
+}
+// ----------------
 
 void AudioCodec::EnableInput(bool enable) {
     if (enable == input_enabled_) {

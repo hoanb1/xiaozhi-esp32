@@ -84,6 +84,13 @@ public:
     void SetSttOnlyMode(bool enable) ;
     BackgroundTask* GetBackgroundTask() const { return background_task_; }
 
+    void EnterAudioTestingMode();
+    void ExitAudioTestingMode();
+    
+    // Battery saver mode control
+    void SetBatterySaverMode(bool enable);
+    void EnterDeepSleep();
+
 private:
     Application();
     ~Application();
@@ -104,6 +111,7 @@ private:
     bool aborted_ = false;
     bool voice_detected_ = false;
     bool busy_decoding_audio_ = false;
+    bool battery_save_mode_ = false;  // Battery saver mode flag
     bool stt_only_mode_ = false;  // STT (Speech-to-Text) only mode flag
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
@@ -139,8 +147,7 @@ private:
     void OnClockTimer();
     void SetListeningMode(ListeningMode mode);
     void AudioLoop();
-    void EnterAudioTestingMode();
-    void ExitAudioTestingMode();
+
 
     void HandleSttMode(const cJSON *root);
     void HandleNormalMode(const cJSON *root);

@@ -81,7 +81,9 @@ void Es8311AudioCodec::UpdateDeviceState() {
             .mclk_multiple = 0,
         };
         ESP_ERROR_CHECK(esp_codec_dev_open(dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(dev_, AUDIO_CODEC_DEFAULT_MIC_GAIN));
+
+        // Cập nhật: Sử dụng biến mic_gain_ từ lớp cha thay vì hằng số
+        ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(dev_, (float)mic_gain_));
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(dev_, output_volume_));
     } else if (!input_enabled_ && !output_enabled_ && dev_ != nullptr) {
         esp_codec_dev_close(dev_);
@@ -150,8 +152,18 @@ void Es8311AudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gp
 }
 
 void Es8311AudioCodec::SetOutputVolume(int volume) {
+    if (dev_ != nullptr) {
     ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(dev_, volume));
+    }
     AudioCodec::SetOutputVolume(volume);
+}
+
+// Hàm mới: Điều chỉnh gain mic
+void Es8311AudioCodec::SetMicGain(int gain) {
+    if (dev_ != nullptr) {
+        ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(dev_, (float)gain));
+    }
+    AudioCodec::SetMicGain(gain);
 }
 
 void Es8311AudioCodec::EnableInput(bool enable) {
