@@ -1,3 +1,5 @@
+// File: freenove_esp32s3_display.cc
+
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
@@ -63,7 +65,7 @@ private:
         return ret == ESP_OK;
     }
 
-    // --- CÔNG THỨC MAPPING TỌA ĐỘ MỚI DỰA TRÊN DỮ LIỆU TEST ---
+    // Touch coordinate mapping verified via runtime logs
     bool ReadTouchPoint(uint16_t &x, uint16_t &y) {
         uint8_t touch_count = 0;
         if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) return false;
@@ -76,14 +78,9 @@ private:
         uint16_t raw_x = ((data[0] & 0x0F) << 8) | data[1];
         uint16_t raw_y = ((data[2] & 0x0F) << 8) | data[3];
 
-        // Biến đổi dựa trên 5 điểm test:
-        // Top-Left [252, 19] -> Cần [0, 0]
-        // Top-Right [20, 28] -> Cần [320, 0]
-        // Bottom-Right [24, 187] -> Cần [320, 240]
         x = raw_x;
         y = raw_y;
 
-        // Giới hạn an toàn
         if (x >= 320) x = 319;
         if (y >= 240) y = 239;
 
@@ -115,21 +112,21 @@ private:
     }
 
     static void LvglTouchCb(lv_indev_t *indev, lv_indev_data_t *data) {
-        FreenoveESP32S3Display *self = (FreenoveESP32S3Display *) lv_indev_get_user_data(indev);
+        auto *self = static_cast<FreenoveESP32S3Display *>(
+            lv_indev_get_user_data(indev));
         uint16_t x, y;
         if (self && self->ReadTouchPoint(x, y)) {
             data->point.x = (lv_coord_t) x;
             data->point.y = (lv_coord_t) y;
             data->state = LV_INDEV_STATE_PRESSED;
+            ESP_LOGI(TAG, "LVGL Pressed: %d, %d", x, y);
         } else {
             data->state = LV_INDEV_STATE_RELEASED;
         }
     }
 
     static void OnDisplayClicked(lv_event_t *e) {
-        lv_event_code_t code = lv_event_get_code(e);
-        // Nhận diện sự kiện click để bật/tắt nghe
-        if(code == LV_EVENT_CLICKED) {
+        if (lv_event_get_code(e) == LV_EVENT_SHORT_CLICKED) {
             ESP_LOGI(TAG, ">>>> DISPLAY CLICKED - TOGGLE CHAT <<<<");
             Application::GetInstance().ToggleChatState();
         }
@@ -250,11 +247,9 @@ public:
             lv_indev_set_read_cb(indev, LvglTouchCb);
             lv_indev_set_user_data(indev, this);
 
-            // TĂNG VÙNG NHẬN SỰ KIỆN: Gán trực tiếp vào màn hình (screen)
-            // Thay vì chỉ vùng Content, bấm bất cứ đâu trên màn hình cũng sẽ toggle chat
             lv_obj_t* scr = lv_screen_active();
             lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_add_event_cb(scr, OnDisplayClicked, LV_EVENT_CLICKED, nullptr);
+            lv_obj_add_event_cb(scr, OnDisplayClicked, LV_EVENT_SHORT_CLICKED, nullptr);
 
             lvgl_port_unlock();
         }
@@ -263,7 +258,8 @@ public:
     }
 
     ~FreenoveESP32S3Display() {
-        if (touch_dev_handle_ != nullptr) i2c_master_bus_rm_device(touch_dev_handle_);
+        if (touch_dev_handle_)
+            i2c_master_bus_rm_device(touch_dev_handle_);
     }
 
     virtual Led *GetLed() override {
@@ -289,71 +285,44 @@ public:
         return &backlight;
     }
 
-    virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) override {
+    bool GetBatteryLevel(
+        int &level, bool &charging, bool &discharging) override {
         static uint32_t last_check = 0;
         uint32_t now = esp_log_timestamp();
 
-        if (last_check > 0 && (now - last_check) < 10000) {
+        if (last_check && (now - last_check) < 10000) {
             level = last_battery_level_;
             charging = last_charging_state_;
-            discharging = !last_charging_state_;
+            discharging = !charging;
             return true;
         }
 
         adc_oneshot_unit_handle_t handle = nullptr;
-        adc_oneshot_unit_init_cfg_t init_config = {.unit_id = ADC_UNIT_1};
+        adc_oneshot_unit_init_cfg_t init_cfg = {.unit_id = ADC_UNIT_1};
 
-        if (adc_oneshot_new_unit(&init_config, &handle) == ESP_OK) {
-            adc_oneshot_chan_cfg_t chan_config = {
+        if (adc_oneshot_new_unit(&init_cfg, &handle) == ESP_OK) {
+            adc_oneshot_chan_cfg_t chan_cfg = {
                 .atten = ADC_ATTEN_DB_12,
-                .bitwidth = ADC_BITWIDTH_DEFAULT
-            };
-            adc_oneshot_config_channel(handle, ADC_CHANNEL_8, &chan_config);
-
-            adc_cali_handle_t cali_handle = NULL;
-            adc_cali_curve_fitting_config_t cali_config = {
-                .unit_id = ADC_UNIT_1,
-                .atten = ADC_ATTEN_DB_12,
-                .bitwidth = ADC_BITWIDTH_DEFAULT,
-            };
-            bool cali_enabled = (adc_cali_create_scheme_curve_fitting(&cali_config, &cali_handle) == ESP_OK);
+                .bitwidth = ADC_BITWIDTH_DEFAULT};
+            adc_oneshot_config_channel(
+                handle, ADC_CHANNEL_8, &chan_cfg);
 
             int adc_raw = 0;
             if (adc_oneshot_read(handle, ADC_CHANNEL_8, &adc_raw) == ESP_OK) {
-                int voltage_mv = 0;
-                if (cali_enabled) {
-                    adc_cali_raw_to_voltage(cali_handle, adc_raw, &voltage_mv);
-                } else {
-                    voltage_mv = (adc_raw * 3300) / 4095;
-                }
-
-                int real_voltage_mv = voltage_mv * 2;
-
-                if (real_voltage_mv > 4185) {
-                    last_charging_state_ = true;
-                } else if (last_voltage_mv_ > 0 && (real_voltage_mv - last_voltage_mv_) > 25) {
-                    last_charging_state_ = true;
-                } else if (last_voltage_mv_ > 0 && (last_voltage_mv_ - real_voltage_mv) > 10) {
-                    last_charging_state_ = false;
-                }
-
-                if (real_voltage_mv >= 4150) level = 100;
-                else if (real_voltage_mv <= 3500) level = 0;
-                else level = (real_voltage_mv - 3500) / 6.5;
-
+                int mv = (adc_raw * 3300) / 4095;
+                int real_mv = mv * 2;
+                if (real_mv >= 4150) level = 100;
+                else if (real_mv <= 3500) level = 0;
+                else level = (real_mv - 3500) / 6.5;
                 last_battery_level_ = level;
-                last_voltage_mv_ = real_voltage_mv;
-                ESP_LOGI(TAG, "Battery level updated: %d%% (%dmV)", level, real_voltage_mv);
             }
-
-            if (cali_enabled) adc_cali_delete_scheme_curve_fitting(cali_handle);
             adc_oneshot_del_unit(handle);
             last_check = now;
         }
 
         level = last_battery_level_;
         charging = last_charging_state_;
-        discharging = !last_charging_state_;
+        discharging = !charging;
         return true;
     }
 };

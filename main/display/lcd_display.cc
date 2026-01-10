@@ -309,7 +309,6 @@ void LcdDisplay::Unlock() {
 #if CONFIG_USE_WECHAT_MESSAGE_STYLE
 void LcdDisplay::SetupUI() {
     DisplayLockGuard lock(this);
-
     auto screen = lv_screen_active();
     lv_obj_set_style_text_font(screen, fonts_.text_font, 0);
     lv_obj_set_style_text_color(screen, current_theme_.text, 0);
@@ -317,6 +316,7 @@ void LcdDisplay::SetupUI() {
 
     /* Container */
     container_ = lv_obj_create(screen);
+
     lv_obj_set_size(container_, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_flex_flow(container_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(container_, 0, 0);
@@ -345,6 +345,8 @@ void LcdDisplay::SetupUI() {
     // Set to AUTO so the scrollbar appears when dragging/scrolling
     lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_scroll_dir(content_, LV_DIR_VER);
+    lv_obj_add_flag(content_, LV_OBJ_FLAG_EVENT_BUBBLE);
+
 
     // Ensure scroll flags are set
     lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLLABLE);
