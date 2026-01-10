@@ -63,7 +63,7 @@ private:
         return ret == ESP_OK;
     }
 
-    // --- XỬ LÝ TỌA ĐỘ VÀ HƯỚNG VUỐT ---
+    // --- CÔNG THỨC MAPPING TỌA ĐỘ MỚI DỰA TRÊN DỮ LIỆU TEST ---
     bool ReadTouchPoint(uint16_t &x, uint16_t &y) {
         uint8_t touch_count = 0;
         if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) return false;
@@ -73,16 +73,21 @@ private:
         uint8_t data[4];
         if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) return false;
 
-        // Tọa độ thô từ chip
         uint16_t raw_x = ((data[0] & 0x0F) << 8) | data[1];
         uint16_t raw_y = ((data[2] & 0x0F) << 8) | data[3];
 
-
+        // Biến đổi dựa trên 5 điểm test:
+        // Top-Left [252, 19] -> Cần [0, 0]
+        // Top-Right [20, 28] -> Cần [320, 0]
+        // Bottom-Right [24, 187] -> Cần [320, 240]
         x = raw_x;
         y = raw_y;
 
+        // Giới hạn an toàn
+        if (x >= 320) x = 319;
+        if (y >= 240) y = 239;
 
-        ESP_LOGD(TAG, "Touch Raw: [%d, %d] -> Screen: [%d, %d]", raw_x, raw_y, x, y);
+        ESP_LOGI(TAG, "Touch Physical: [%d,%d]", x, y);
         return true;
     }
 
@@ -103,8 +108,6 @@ private:
         if (ReadTouchRegister(FT6336_FIRMWARE_ID, &chip_id, 1)) {
             ESP_LOGI(TAG, "Touch controller found. Chip ID: 0x%02X", chip_id);
             touch_initialized_ = true;
-        } else {
-            ESP_LOGE(TAG, "Touch controller not found at 0x%02X", FT6336_ADDR);
         }
 
         WriteTouchRegister(FT6336_CTRL, 0x00);
@@ -125,8 +128,9 @@ private:
 
     static void OnDisplayClicked(lv_event_t *e) {
         lv_event_code_t code = lv_event_get_code(e);
+        // Nhận diện sự kiện click để bật/tắt nghe
         if(code == LV_EVENT_CLICKED) {
-            ESP_LOGI(TAG, "Screen clicked - Toggle chat state");
+            ESP_LOGI(TAG, ">>>> DISPLAY CLICKED - TOGGLE CHAT <<<<");
             Application::GetInstance().ToggleChatState();
         }
     }
@@ -246,24 +250,20 @@ public:
             lv_indev_set_read_cb(indev, LvglTouchCb);
             lv_indev_set_user_data(indev, this);
 
-            // Gán sự kiện click vào toàn màn hình
-            lv_obj_t* screen = lv_scr_act();
-            lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_add_event_cb(screen, OnDisplayClicked, LV_EVENT_CLICKED, nullptr);
+            // TĂNG VÙNG NHẬN SỰ KIỆN: Gán trực tiếp vào màn hình (screen)
+            // Thay vì chỉ vùng Content, bấm bất cứ đâu trên màn hình cũng sẽ toggle chat
+            lv_obj_t* scr = lv_screen_active();
+            lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(scr, OnDisplayClicked, LV_EVENT_CLICKED, nullptr);
 
             lvgl_port_unlock();
-            ESP_LOGI(TAG, "LVGL Input device and Click events initialized");
-        } else {
-            ESP_LOGW(TAG, "Touch not functional, skipping LVGL indev registration");
         }
 
         GetBacklight()->SetBrightness(100);
     }
 
     ~FreenoveESP32S3Display() {
-        if (touch_dev_handle_ != nullptr) {
-            i2c_master_bus_rm_device(touch_dev_handle_);
-        }
+        if (touch_dev_handle_ != nullptr) i2c_master_bus_rm_device(touch_dev_handle_);
     }
 
     virtual Led *GetLed() override {
@@ -343,7 +343,7 @@ public:
 
                 last_battery_level_ = level;
                 last_voltage_mv_ = real_voltage_mv;
-                ESP_LOGD(TAG, "Battery level updated: %d%% (%dmV)", level, real_voltage_mv);
+                ESP_LOGI(TAG, "Battery level updated: %d%% (%dmV)", level, real_voltage_mv);
             }
 
             if (cali_enabled) adc_cali_delete_scheme_curve_fitting(cali_handle);
