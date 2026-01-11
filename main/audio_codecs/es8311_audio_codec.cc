@@ -173,17 +173,20 @@ int Es8311AudioCodec::Read(int16_t* dest, int samples) {
         esp_err_t err = esp_codec_dev_read(dev_, (void*)dest, samples * sizeof(int16_t));
         if (err != ESP_OK) return 0;
 
-        // --- Tính toán cường độ Mic (RMS) ---
-        long long sum_sq = 0;
-        for (int i = 0; i < samples; i++) {
-            sum_sq += (long long)dest[i] * dest[i];
-        }
-        float rms = std::sqrt((float)sum_sq / samples);
-        // Hệ số 5000.0f quyết định độ nhạy của thanh bar
-        int level = std::clamp((int)((rms / 5000.0f) * 100.0f), 0, 100);
+        static uint32_t last_mic_calc_time = 0;
+        uint32_t now = esp_log_timestamp();
 
-        // Gọi Callback để truyền dữ liệu về Board
-        if (on_input_level_ != nullptr) {
+        if (on_input_level_ != nullptr && (now - last_mic_calc_time >= 100)) {
+            last_mic_calc_time = now;
+
+            long long sum_sq = 0;
+            for (int i = 0; i < samples; i++) {
+                sum_sq += (int32_t)dest[i] * dest[i];
+            }
+
+            float rms = std::sqrt((float)sum_sq / samples);
+            int level = std::clamp((int)((rms / 5000.0f) * 100.0f), 0, 100);
+
             on_input_level_(level);
         }
 

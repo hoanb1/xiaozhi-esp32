@@ -65,6 +65,11 @@ Application::Application() {
 
     battery_save_mode_ = true;
 
+    // --- CỜ ĐIỀU KHIỂN LOGIC ---
+    // true: Tắt mic khi đang phát loa (Half-duplex)
+    // false: Luôn bật mic (Full-duplex / AEC)
+    mute_mic_while_speaking_ = true;
+
 #if CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
     ESP_LOGI(TAG, "[Init] AEC Mode: Device Side");
@@ -925,7 +930,7 @@ void Application::AudioLoop() {
     auto codec = Board::GetInstance().GetAudioCodec();
     ESP_LOGI(TAG, "Audio task loop started");
     while (true) {
-        OnAudioInput();
+            OnAudioInput();
         if (codec->output_enabled()) {
             OnAudioOutput();
         }
@@ -1114,48 +1119,79 @@ void Application::SetDeviceState(DeviceState state) {
     auto &board = Board::GetInstance();
     auto display = board.GetDisplay();
     auto led = board.GetLed();
+    auto codec = board.GetAudioCodec(); // Lấy codec để điều khiển microphone
     led->OnStateChanged();
+
     switch (state) {
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
             audio_processor_->Stop();
+
+            // Ở trạng thái nghỉ: Luôn bật Microphone để chờ Wake Word
+            codec->EnableInput(true);
+            codec->EnableOutput(false); // Đảm bảo PA loa tắt khi nghỉ
+
             wake_word_->StartDetection();
             break;
+
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
             display->SetChatMessage("system", "");
             timestamp_queue_.clear();
             break;
+
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
             if (!audio_processor_->IsRunning()) {
+                // Đang nghe: Bật Microphone, Tắt PA loa để tránh nhiễu
+                codec->EnableOutput(false);
+                codec->EnableInput(true);
+
                 protocol_->SendStartListening(listening_mode_);
                 opus_encoder_->ResetState();
                 audio_processor_->Start();
                 wake_word_->StopDetection();
             }
             break;
+
         case kDeviceStateSpeaking:
             if (stt_only_mode_) {
                 device_state_ = kDeviceStateListening;
                 if (!audio_processor_->IsRunning()) {
+                    codec->EnableOutput(false);
+                    codec->EnableInput(true);
                     protocol_->SendStartListening(listening_mode_);
                     opus_encoder_->ResetState();
                     audio_processor_->Start();
                     wake_word_->StopDetection();
                 }
-                led->OnStateChanged(); // Cập nhật lại đèn cho trạng thái mới
+                led->OnStateChanged();
                 break;
             }
             display->SetStatus(Lang::Strings::SPEAKING);
+
+            // XỬ LÝ RESET DECODER TRƯỚC (Vì nó chứa EnableOutput nội bộ)
+            ResetDecoder();
+
+            // SAU ĐÓ MỚI ÁP DỤNG LOGIC MUTE MIC
+            if (mute_mic_while_speaking_) {
+                ESP_LOGI(TAG, "Muting microphone and Enabling PA for speaking");
+                codec->EnableInput(false);
+            }
+            codec->EnableOutput(true); // Bật PA loa để nói
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_processor_->Stop();
                 wake_word_->StartDetection();
             }
-            ResetDecoder();
             break;
+
+        case kDeviceStateUpgrading:
+            codec->EnableInput(false);
+            codec->EnableOutput(false);
+            break;
+
         default:
             break;
     }
@@ -1168,8 +1204,7 @@ void Application::ResetDecoder() {
     audio_decode_queue_.clear();
     audio_decode_cv_.notify_all();
     last_output_time_ = std::chrono::steady_clock::now();
-    auto codec = Board::GetInstance().GetAudioCodec();
-    codec->EnableOutput(true);
+    // Bỏ codec->EnableOutput(true) ở đây để quản lý tập trung tại SetDeviceState
 }
 
 void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {

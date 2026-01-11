@@ -913,14 +913,15 @@ void LcdDisplay::SetStatus(const char *status) {
 }
 
 void LcdDisplay::UpdateMicLevel(int level) {
+    static int last_drawn_level = -1;
+    if (abs(level - last_drawn_level) < 3) return;
+
     DisplayLockGuard lock(this);
     if (mic_level_bar_ != nullptr) {
         lv_bar_set_value(mic_level_bar_, std::clamp(level, 0, 100), LV_ANIM_OFF);
-
-        ESP_LOGD(TAG, "Mic Level: %d%%", level);
+        last_drawn_level = level;
     }
 }
-
 void LcdDisplay::SetSttMode(bool enable) {
     DisplayLockGuard lock(this);
     stt_mode_active_ = enable;

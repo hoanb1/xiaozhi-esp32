@@ -115,6 +115,7 @@ private:
     bool busy_decoding_audio_ = false;
     bool battery_save_mode_ = false;  // Battery saver mode flag
     bool stt_only_mode_ = false;  // STT (Speech-to-Text) only mode flag
+    bool mute_mic_while_speaking_ = true;  // Controls whether to mute mic while speaking (half-duplex when true)
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
 
