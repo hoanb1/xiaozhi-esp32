@@ -13,8 +13,8 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "audio_debugger.h"
-#include "freertos/task.h" // Thêm thư viện này để dùng vTaskDelay
-#include <esp_sleep.h>     // Thêm thư viện Deep Sleep
+#include "freertos/task.h"
+#include <esp_sleep.h>
 
 #if CONFIG_USE_AUDIO_PROCESSOR
 #include "afe_audio_processor.h"
@@ -38,11 +38,10 @@
 
 #define TAG "Application"
 
-// --- CẤU HÌNH THỜI GIAN TIẾT KIỆM PIN ---
-// Sau 2 phút: Tắt màn hình (Vẫn nhận diện giọng nói - Voice Wakeup OK)
-#define BATTERY_SAVE_DIM_TIMEOUT 60
-// Sau 5 phút: Ngủ sâu (Chỉ nhận diện nút bấm - Button Wakeup Only)
-#define BATTERY_SAVE_SLEEP_TIMEOUT 300
+// --- CẤU HÌNH THỜI GIAN TIẾT KIỆM PIN (Giây) ---
+#define BATTERY_SAVE_DIM_TIMEOUT   60   // 1 phút: Giảm độ sáng
+#define BATTERY_SAVE_OFF_TIMEOUT   120  // 2 phút: Tắt hẳn màn hình
+#define BATTERY_SAVE_SLEEP_TIMEOUT 600  // 10 phút: Ngủ sâu (Deep Sleep)
 
 static const char *const STATE_STRINGS[] = {
     "unknown",
@@ -63,8 +62,7 @@ Application::Application() {
     event_group_ = xEventGroupCreate();
     background_task_ = new BackgroundTask(4096 * 7);
 
-    // Mặc định tắt chế độ tiết kiệm pin lúc khởi động để tránh ngủ ngay lập tức
-    battery_save_mode_ = false;
+    battery_save_mode_ = true;
 
 #if CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
@@ -339,11 +337,9 @@ void Application::ToggleChatState() {
     // LOGIC CHO STT ONLY MODE
     // -------------------------------------------------------------
     if (stt_only_mode_) {
-        // Nếu đang nghe hoặc nói -> Người dùng muốn TẮT (Nghỉ)
         if (device_state_ == kDeviceStateListening || device_state_ == kDeviceStateSpeaking || device_state_ ==
             kDeviceStateConnecting) {
             ESP_LOGI(TAG, "STT Mode: User toggled to PAUSE (Idle)");
-            // Đặt cờ ManualStop để Watchdog không tự bật lại
             listening_mode_ = kListeningModeManualStop;
             Schedule([this]() {
                 if (protocol_->IsAudioChannelOpened()) {
@@ -353,13 +349,10 @@ void Application::ToggleChatState() {
                 }
             });
         }
-        // Nếu đang nghỉ -> Người dùng muốn BẬT (Nghe lại)
         else {
             ESP_LOGI(TAG, "STT Mode: User toggled to RESUME (Listening)");
-            // Đặt cờ Realtime để Watchdog có thể hỗ trợ nếu rớt mạng
             listening_mode_ = kListeningModeRealtime;
             Schedule([this]() {
-                // QUAN TRỌNG: Mở kênh TRƯỚC khi gửi WakeWord
                 if (!protocol_->IsAudioChannelOpened()) {
                     SetDeviceState(kDeviceStateConnecting);
                     if (!protocol_->OpenAudioChannel()) {
@@ -836,8 +829,8 @@ void Application::Start() {
 
     has_server_time_ = ota.HasServerTime();
     if (protocol_started) {
-       // std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
-       // display->ShowNotification(message.c_str());
+        std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
+        display->ShowNotification(message.c_str());
         display->SetChatMessage("system", "");
         // Play the success sound to indicate the device is ready
         ResetDecoder();
@@ -862,15 +855,24 @@ void Application::OnClockTimer() {
              display->UpdateStatusBar();
         }
 
-        // Auto Dim (Low power) - 2 minutes
-        // TRONG GIAI ĐOẠN NÀY: Màn hình tắt, nhưng VOICE WAKEUP VẪN HOẠT ĐỘNG
+        // --- LOGIC TIẾT KIỆM PIN 3 GIAI ĐOẠN ---
+
+        // Giai đoạn 1: Sau 60 giây - Giảm độ sáng
         if (clock_ticks_ == BATTERY_SAVE_DIM_TIMEOUT) {
-            ESP_LOGI(TAG, "Auto-dimming screen due to inactivity");
-            Board::GetInstance().SetPowerSaveMode(true);
+            ESP_LOGI(TAG, "Battery save stage 1: Dimming screen");
+            Board::GetInstance().SetPowerSaveMode(true); // Thực thi Dimming (10% độ sáng)
         }
 
-        // Auto Deep Sleep - 5 minutes
-        // GIAI ĐOẠN NÀY: Tắt CPU -> CHỈ CÓ THỂ WAKEUP BẰNG NÚT BẤM
+        // Giai đoạn 2: Sau 120 giây (2 phút) - Tắt hẳn màn hình
+        // Voice wakeup vẫn hoạt động vì CPU vẫn chạy
+        if (clock_ticks_ == BATTERY_SAVE_OFF_TIMEOUT) {
+            ESP_LOGI(TAG, "Battery save stage 2: Turning off display");
+            auto backlight = Board::GetInstance().GetBacklight();
+            if (backlight) backlight->SetBrightness(0);
+        }
+
+        // Giai đoạn 3: Sau 600 giây (10 phút) - Ngủ sâu
+        // Tắt mọi thứ, chỉ dậy được bằng nút bấm
         if (clock_ticks_ >= BATTERY_SAVE_SLEEP_TIMEOUT) {
             EnterDeepSleep();
         }
@@ -1127,8 +1129,7 @@ void Application::SetDeviceState(DeviceState state) {
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
 
-    // Restore power (brightness) when active
-    // FIX: Do not call SetPowerSaveMode during 'starting' as WiFi is not init yet
+    // Khôi phục màn hình sáng rực ngay khi có bất kỳ hoạt động nào
     if (state != kDeviceStateIdle && state != kDeviceStateUnknown && state != kDeviceStateStarting) {
         Board::GetInstance().SetPowerSaveMode(false);
     }
@@ -1364,13 +1365,7 @@ void Application::EnterDeepSleep() {
     ESP_LOGI(TAG, "Entering Deep Sleep (Wakeup: Button GPIO0)...");
     Board::GetInstance().GetDisplay()->SetStatus("Deep Sleep");
 
-    // Đợi một chút để UI kịp cập nhật
     vTaskDelay(pdMS_TO_TICKS(500));
-
-    // Cấu hình nút BOOT (GPIO 0) để đánh thức từ Deep Sleep
-    // 0 = Low level (khi nhấn nút thì GPIO 0 về mức thấp)
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
-
-    // Bắt đầu ngủ sâu (CPU tắt, Mic tắt -> Không dùng Voice được ở giai đoạn này)
     esp_deep_sleep_start();
 }

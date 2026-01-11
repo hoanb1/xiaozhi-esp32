@@ -1,4 +1,4 @@
-// File: freenove_esp32s3_display.cc
+// File: src/boards/freenove_esp32s3_display.cc
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -37,7 +37,7 @@ LV_FONT_DECLARE(font_awesome_16_4);
 class FreenoveESP32S3Display : public WifiBoard {
 private:
     Button boot_button_;
-    LcdDisplay *display_;
+    LcdDisplay *display_ = nullptr;
     i2c_master_bus_handle_t codec_i2c_bus_;
     i2c_master_dev_handle_t touch_dev_handle_ = nullptr;
     bool touch_initialized_ = false;
@@ -47,29 +47,34 @@ private:
     bool last_charging_state_ = false;
     bool stt_only_active_ = false;
 
+    /* ================= TOUCH ================= */
+
     bool ReadTouchRegister(uint8_t reg, uint8_t *data, size_t len) {
         if (!touch_initialized_ && reg != FT6336_FIRMWARE_ID) return false;
         esp_err_t ret = i2c_master_transmit_receive(touch_dev_handle_, &reg, 1, data, len, -1);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "I2C read failed at reg 0x%02X: %s", reg, esp_err_to_name(ret));
+            ESP_LOGE(TAG, "I2C read failed reg=0x%02X: %s",
+                     reg, esp_err_to_name(ret));
         }
         return ret == ESP_OK;
     }
 
     bool WriteTouchRegister(uint8_t reg, uint8_t value) {
-        uint8_t write_buf[2] = {reg, value};
-        esp_err_t ret = i2c_master_transmit(touch_dev_handle_, write_buf, 2, -1);
+        uint8_t buf[2] = {reg, value};
+        esp_err_t ret = i2c_master_transmit(
+            touch_dev_handle_, buf, 2, -1);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "I2C write failed at reg 0x%02X: %s", reg, esp_err_to_name(ret));
+            ESP_LOGE(TAG, "I2C write failed reg=0x%02X: %s",
+                     reg, esp_err_to_name(ret));
         }
         return ret == ESP_OK;
     }
 
     bool ReadTouchPoint(uint16_t &x, uint16_t &y) {
-        uint8_t touch_count = 0;
-        if (!ReadTouchRegister(FT6336_TD_STATUS, &touch_count, 1)) return false;
-        touch_count &= 0x0F;
-        if (touch_count == 0 || touch_count > 2) return false;
+        uint8_t count = 0;
+        if (!ReadTouchRegister(FT6336_TD_STATUS, &count, 1)) return false;
+        count &= 0x0F;
+        if (count == 0 || count > 2) return false;
 
         uint8_t data[4];
         if (!ReadTouchRegister(FT6336_TOUCH1_XH, data, 4)) return false;
@@ -88,21 +93,23 @@ private:
     }
 
     void InitializeTouch() {
-        ESP_LOGI(TAG, "Initializing FT6336 touch controller...");
-        i2c_device_config_t dev_cfg = {
+        ESP_LOGI(TAG, "Init FT6336 touch");
+
+        i2c_device_config_t cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = FT6336_ADDR,
             .scl_speed_hz = 400000,
         };
 
-        if (i2c_master_bus_add_device(codec_i2c_bus_, &dev_cfg, &touch_dev_handle_) != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to add touch device");
+        if (i2c_master_bus_add_device(codec_i2c_bus_, &cfg,
+                                      &touch_dev_handle_) != ESP_OK) {
+            ESP_LOGE(TAG, "Add touch device failed");
             return;
         }
 
-        uint8_t chip_id;
-        if (ReadTouchRegister(FT6336_FIRMWARE_ID, &chip_id, 1)) {
-            ESP_LOGI(TAG, "Touch controller found. Chip ID: 0x%02X", chip_id);
+        uint8_t id;
+        if (ReadTouchRegister(FT6336_FIRMWARE_ID, &id, 1)) {
+            ESP_LOGI(TAG, "Touch OK, chip=0x%02X", id);
             touch_initialized_ = true;
         }
 
@@ -110,60 +117,64 @@ private:
         WriteTouchRegister(FT6336_THRESHOLD, 0x14);
     }
 
-    // === TOUCH CALLBACK GỌN CHUẨN LVGL ===
     static void LvglTouchCb(lv_indev_t *indev, lv_indev_data_t *data) {
-        auto *self = (FreenoveESP32S3Display *)
-            lv_indev_get_user_data(indev);
+        auto *self = static_cast<FreenoveESP32S3Display *>(
+            lv_indev_get_user_data(indev));
 
         uint16_t x, y;
         if (self && self->ReadTouchPoint(x, y)) {
-                data->state = LV_INDEV_STATE_PRESSED;
+            data->state = LV_INDEV_STATE_PRESSED;
             data->point.x = x;
             data->point.y = y;
-            } else {
-                data->state = LV_INDEV_STATE_RELEASED;
-            }
+        } else {
+            data->state = LV_INDEV_STATE_RELEASED;
         }
-
-    static void OnDisplayClicked(lv_event_t *e) {
-
-        ESP_LOGI(TAG, ">>>> DISPLAY CLICKED - TOGGLE CHAT <<<<");
-        Application::GetInstance().ToggleChatState();
-
     }
 
+    /* ================= CLICK CONTENT ================= */
+
+    static void OnContentClicked(lv_event_t *) {
+        ESP_LOGI(TAG, "CONTENT CLICKED -> TOGGLE CHAT");
+        Application::GetInstance().ToggleChatState();
+    }
+
+    /* ================= INIT HW ================= */
+
     void InitializeSpi() {
-        ESP_LOGI(TAG, "Initializing SPI bus for LCD...");
-        spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
-        buscfg.miso_io_num = DISPLAY_MIS0_PIN;
-        buscfg.sclk_io_num = DISPLAY_SCK_PIN;
-        buscfg.quadwp_io_num = GPIO_NUM_NC;
-        buscfg.quadhd_io_num = GPIO_NUM_NC;
-        buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
-        ESP_ERROR_CHECK(spi_bus_initialize(LCD_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
+        spi_bus_config_t cfg = {};
+        cfg.mosi_io_num = DISPLAY_MOSI_PIN;
+        cfg.miso_io_num = DISPLAY_MIS0_PIN;
+        cfg.sclk_io_num = DISPLAY_SCK_PIN;
+        cfg.max_transfer_sz =
+                DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
+        ESP_ERROR_CHECK(
+            spi_bus_initialize(LCD_SPI_HOST, &cfg, SPI_DMA_CH_AUTO));
     }
 
     void InitializeLcdDisplay() {
         ESP_LOGI(TAG, "Creating ILI9341 LCD panel...");
-        esp_lcd_panel_io_handle_t panel_io = nullptr;
+        esp_lcd_panel_io_handle_t io = nullptr;
         esp_lcd_panel_handle_t panel = nullptr;
 
-        esp_lcd_panel_io_spi_config_t io_config = {};
-        io_config.cs_gpio_num = DISPLAY_CS_PIN;
-        io_config.dc_gpio_num = DISPLAY_DC_PIN;
-        io_config.spi_mode = DISPLAY_SPI_MODE;
-        io_config.pclk_hz = DISPLAY_SPI_SCLK_HZ;
-        io_config.trans_queue_depth = 10;
-        io_config.lcd_cmd_bits = 8;
-        io_config.lcd_param_bits = 8;
-        ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(LCD_SPI_HOST, &io_config, &panel_io));
+        esp_lcd_panel_io_spi_config_t io_cfg = {};
+        io_cfg.cs_gpio_num = DISPLAY_CS_PIN;
+        io_cfg.dc_gpio_num = DISPLAY_DC_PIN;
+        io_cfg.spi_mode = DISPLAY_SPI_MODE;
+        io_cfg.pclk_hz = DISPLAY_SPI_SCLK_HZ;
+        io_cfg.trans_queue_depth = 10;
+        io_cfg.lcd_cmd_bits = 8;
+        io_cfg.lcd_param_bits = 8;
 
-        esp_lcd_panel_dev_config_t panel_config = {};
-        panel_config.reset_gpio_num = DISPLAY_RST_PIN;
-        panel_config.rgb_ele_order = DISPLAY_RGB_ORDER;
-        panel_config.bits_per_pixel = 16;
-        ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(panel_io, &panel_config, &panel));
+        ESP_ERROR_CHECK(
+            esp_lcd_new_panel_io_spi(LCD_SPI_HOST, &io_cfg, &io));
+
+        esp_lcd_panel_dev_config_t panel_cfg = {};
+        panel_cfg.reset_gpio_num = DISPLAY_RST_PIN;
+        panel_cfg.rgb_ele_order = DISPLAY_RGB_ORDER;
+        panel_cfg.bits_per_pixel = 16;
+
+        ESP_ERROR_CHECK(
+            esp_lcd_new_panel_ili9341(io, &panel_cfg, &panel));
 
         esp_lcd_panel_reset(panel);
 
@@ -172,31 +183,29 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
-                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
-                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
-                                     {
-                                         .text_font = &font_viet_20,
-                                         .icon_font = &font_awesome_16_4,
-                                         .emoji_font = DISPLAY_HEIGHT >= 240
-                                                           ? font_emoji_64_init()
-                                                           : font_emoji_32_init(),
-                                     });
+        display_ = new SpiLcdDisplay(
+            io, panel,
+            DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+            DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
+            {
+                .text_font = &font_viet_20,
+                .icon_font = &font_awesome_16_4,
+                .emoji_font = DISPLAY_HEIGHT >= 240
+                                  ? font_emoji_64_init()
+                                  : font_emoji_32_init(),
+            });
     }
 
     void InitializeI2c() {
         ESP_LOGI(TAG, "Initializing I2C master bus...");
-        i2c_master_bus_config_t i2c_bus_cfg = {
+        i2c_master_bus_config_t cfg = {
             .i2c_port = AUDIO_CODEC_I2C_NUM,
             .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
             .scl_io_num = AUDIO_CODEC_I2C_SCL_PIN,
             .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .intr_priority = 0,
-            .trans_queue_depth = 0,
             .flags = {.enable_internal_pullup = 1},
         };
-        ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &codec_i2c_bus_));
+        ESP_ERROR_CHECK(i2c_new_master_bus(&cfg, &codec_i2c_bus_));
     }
 
     void InitializeButtons() {
@@ -221,14 +230,21 @@ private:
 
         boot_button_.OnDoubleClick([this]() {
             auto &app = Application::GetInstance();
-            ESP_LOGI(TAG, "Boot button DoubleClick: Toggle Audio Testing");
-
-            if (app.GetDeviceState() == kDeviceStateAudioTesting) {
-                app.ExitAudioTestingMode();
-            } else {
-                app.EnterAudioTestingMode();
-            }
+            stt_only_active_ = !stt_only_active_;
+            ESP_LOGI(TAG, "Boot button DoubleClick: STT Only Mode %s", stt_only_active_ ? "ON" : "OFF");
+            app.SetSttOnlyMode(stt_only_active_);
         });
+
+        boot_button_.OnMultipleClick([this]() {
+           auto &app = Application::GetInstance();
+           ESP_LOGI(TAG, "Boot button OnMultipleClick 3: Toggle Audio Testing");
+
+           if (app.GetDeviceState() == kDeviceStateAudioTesting) {
+               app.ExitAudioTestingMode();
+           } else {
+               app.EnterAudioTestingMode();
+           }
+       },3);
     }
 
 public:
@@ -254,11 +270,9 @@ public:
 
             lv_obj_add_event_cb(
                 content,
-                OnDisplayClicked,
+                OnContentClicked,
                 LV_EVENT_CLICKED,
-                nullptr
-            );
-
+                nullptr);
 
             lvgl_port_unlock();
         }
@@ -271,29 +285,48 @@ public:
             i2c_master_bus_rm_device(touch_dev_handle_);
     }
 
-    virtual Led *GetLed() override {
+    Led *GetLed() override {
         static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
-    virtual AudioCodec *GetAudioCodec() override {
-        static Es8311AudioCodec audio_codec(codec_i2c_bus_, AUDIO_CODEC_I2C_NUM,
-                                            AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK,
-                                            AUDIO_I2S_GPIO_BCLK,
-                                            AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
-                                            AUDIO_CODEC_PA_PIN,
-                                            AUDIO_CODEC_ES8311_ADDR, true, true);
-        return &audio_codec;
+    AudioCodec *GetAudioCodec() override {
+        static Es8311AudioCodec codec(
+            codec_i2c_bus_, AUDIO_CODEC_I2C_NUM,
+            AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
+            AUDIO_CODEC_PA_PIN,
+            AUDIO_CODEC_ES8311_ADDR, true, true);
+        return &codec;
     }
 
-    virtual Display *GetDisplay() override { return display_; }
+    Display *GetDisplay() override { return display_; }
 
-    virtual Backlight *GetBacklight() override {
+    Backlight *GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN,
                                       DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
     }
 
+    void SetPowerSaveMode(bool enable) override {
+        // Luôn cập nhật trạng thái WiFi
+        WifiBoard::SetPowerSaveMode(enable);
+
+        auto backlight = GetBacklight();
+        if (backlight) {
+            if (enable) {
+                // Dimming stage: Giảm xuống mức cực thấp (10%) để tiết kiệm điện
+                // nhưng người dùng vẫn thấy mờ mờ là máy đang chạy.
+                ESP_LOGI(TAG, "PowerSave: Dimming screen to 10%%");
+                backlight->SetBrightness(10);
+            } else {
+                // Active stage: Quay lại độ sáng tối đa
+                ESP_LOGI(TAG, "PowerSave: Restoring screen to 100%%");
+                backlight->SetBrightness(100);
+            }
+        }
+    }
     bool GetBatteryLevel(
         int &level, bool &charging, bool &discharging) override {
         static uint32_t last_check = 0;
