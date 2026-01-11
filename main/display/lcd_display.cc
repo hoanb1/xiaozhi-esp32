@@ -70,7 +70,8 @@ const ThemeColors LIGHT_THEME = {
 
 LV_FONT_DECLARE(font_awesome_30_4);
 
-LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, DisplayFonts fonts, int width, int height)
+LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, DisplayFonts fonts, int width,
+                       int height)
     : panel_io_(panel_io), panel_(panel), fonts_(fonts) {
     width_ = width;
     height_ = height;
@@ -88,10 +89,10 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
 }
 
 SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
-                           int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y, bool swap_xy,
-                           DisplayFonts fonts)
+                             int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y,
+                             bool swap_xy,
+                             DisplayFonts fonts)
     : LcdDisplay(panel_io, panel, fonts, width, height) {
-
     // draw white
     std::vector<uint16_t> buffer(width_, 0xFFFF);
     for (int y = 0; y < height_; y++) {
@@ -153,11 +154,10 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
 // RGB LCD Implementation
 RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
-                           int width, int height, int offset_x, int offset_y,
-                           bool mirror_x, bool mirror_y, bool swap_xy,
-                           DisplayFonts fonts)
+                             int width, int height, int offset_x, int offset_y,
+                             bool mirror_x, bool mirror_y, bool swap_xy,
+                             DisplayFonts fonts)
     : LcdDisplay(panel_io, panel, fonts, width, height) {
-
     // draw white
     std::vector<uint16_t> buffer(width_, 0xFFFF);
     for (int y = 0; y < height_; y++) {
@@ -200,13 +200,13 @@ RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
             .avoid_tearing = true,
         }
     };
-    
+
     display_ = lvgl_port_add_disp_rgb(&display_cfg, &rgb_cfg);
     if (display_ == nullptr) {
         ESP_LOGE(TAG, "Failed to add RGB display");
         return;
     }
-    
+
     if (offset_x != 0 || offset_y != 0) {
         lv_display_set_offset(display_, offset_x, offset_y);
     }
@@ -215,11 +215,10 @@ RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 }
 
 MipiLcdDisplay::MipiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
-                            int width, int height,  int offset_x, int offset_y,
-                            bool mirror_x, bool mirror_y, bool swap_xy,
-                            DisplayFonts fonts)
+                               int width, int height, int offset_x, int offset_y,
+                               bool mirror_x, bool mirror_y, bool swap_xy,
+                               DisplayFonts fonts)
     : LcdDisplay(panel_io, panel, fonts, width, height) {
-
     // Set the display to on
     ESP_LOGI(TAG, "Turning display on");
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
@@ -233,23 +232,23 @@ MipiLcdDisplay::MipiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel
 
     ESP_LOGI(TAG, "Adding LCD display");
     const lvgl_port_display_cfg_t disp_cfg = {
-            .io_handle = panel_io,
-            .panel_handle = panel,
-            .control_handle = nullptr,
-            .buffer_size = static_cast<uint32_t>(width_ * 50),
-            .double_buffer = false,
-            .hres = static_cast<uint32_t>(width_),
-            .vres = static_cast<uint32_t>(height_),
-            .monochrome = false,
-            /* Rotation values must be same as used in esp_lcd for initial settings of the screen */
-            .rotation = {
+        .io_handle = panel_io,
+        .panel_handle = panel,
+        .control_handle = nullptr,
+        .buffer_size = static_cast<uint32_t>(width_ * 50),
+        .double_buffer = false,
+        .hres = static_cast<uint32_t>(width_),
+        .vres = static_cast<uint32_t>(height_),
+        .monochrome = false,
+        /* Rotation values must be same as used in esp_lcd for initial settings of the screen */
+        .rotation = {
             .swap_xy = swap_xy,
             .mirror_x = mirror_x,
             .mirror_y = mirror_y,
         },
         .flags = {
             .buff_dma = true,
-            .buff_spiram =false,
+            .buff_spiram = false,
             .sw_rotate = false,
         },
     };
@@ -357,7 +356,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_flex_flow(status_bar_, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_all(status_bar_, 0, 0);
     lv_obj_set_style_border_width(status_bar_, 0, 0);
-    lv_obj_set_style_pad_column(status_bar_, 5, 0); // Tăng column gap để các icon không dính nhau
+    lv_obj_set_style_pad_column(status_bar_, 0, 0);
     lv_obj_set_style_pad_left(status_bar_, 10, 0);
     lv_obj_set_style_pad_right(status_bar_, 10, 0);
     lv_obj_set_style_pad_top(status_bar_, 2, 0);
@@ -398,22 +397,16 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
     lv_obj_set_style_margin_left(battery_label_, 5, 0); // Add left margin
 
-    // Thêm Mic Level Bar vào Status Bar (Góc trái cạnh icon mạng)
+    // =======================Mic Level Bar ============================
     mic_level_bar_ = lv_bar_create(status_bar_);
-    lv_obj_set_size(mic_level_bar_, 30, 8);
+    lv_obj_set_size(mic_level_bar_, 30, 12);
     lv_bar_set_range(mic_level_bar_, 0, 100);
     lv_bar_set_value(mic_level_bar_, 0, LV_ANIM_OFF);
-
-    // CHỈNH SỬA TẠI ĐÂY ĐỂ XÓA PHẦN THỪA XÁM:
-    lv_obj_set_style_pad_all(mic_level_bar_, 0, LV_PART_MAIN); // Xóa padding của khung nền
-    lv_obj_set_style_flex_grow(mic_level_bar_, 0, 0);          // Ngăn flex kéo giãn
-
     lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREY), 0);
     lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
-
-    // Đảm bảo không có margin trái gây hiểu lầm là khoảng xám thừa
-    lv_obj_set_style_margin_left(mic_level_bar_, 0, 0);
-    lv_obj_set_style_margin_right(mic_level_bar_, 5, 0);
+    lv_obj_set_style_margin_left(mic_level_bar_, 5, 0);
+    lv_obj_set_style_margin_right(mic_level_bar_, 8, 0);
+    //===================================================================
 
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
@@ -435,7 +428,7 @@ void LcdDisplay::SetupUI() {
 
 void LcdDisplay::SetFontSize(int size) {
     DisplayLockGuard lock(this);
-    const lv_font_t* new_font = nullptr;
+    const lv_font_t *new_font = nullptr;
 
     if (size <= 16) new_font = fonts_.font_16;
     else if (size >= 24) new_font = fonts_.font_24;
@@ -453,17 +446,17 @@ void LcdDisplay::SetFontSize(int size) {
     if (content_ != nullptr) {
         uint32_t container_count = lv_obj_get_child_cnt(content_);
         for (uint32_t i = 0; i < container_count; i++) {
-            lv_obj_t* container = lv_obj_get_child(content_, i);
+            lv_obj_t *container = lv_obj_get_child(content_, i);
             if (container == nullptr) continue;
 
             uint32_t bubble_count = lv_obj_get_child_cnt(container);
             for (uint32_t j = 0; j < bubble_count; j++) {
-                lv_obj_t* bubble = lv_obj_get_child(container, j);
+                lv_obj_t *bubble = lv_obj_get_child(container, j);
                 if (bubble == nullptr) continue;
 
                 uint32_t item_count = lv_obj_get_child_cnt(bubble);
                 for (uint32_t k = 0; k < item_count; k++) {
-                    lv_obj_t* item = lv_obj_get_child(bubble, k);
+                    lv_obj_t *item = lv_obj_get_child(bubble, k);
                     if (item != nullptr && lv_obj_check_type(item, &lv_label_class)) {
                         lv_obj_set_style_text_font(item, new_font, 0);
                     }
@@ -474,45 +467,45 @@ void LcdDisplay::SetFontSize(int size) {
     ESP_LOGI(TAG, "Font size changed to %dpx using board-provided fonts", size);
 }
 
-void LcdDisplay::SetChatMessage(const char* role, const char* content) {
+void LcdDisplay::SetChatMessage(const char *role, const char *content) {
     DisplayLockGuard lock(this);
     if (content_ == nullptr) {
         return;
     }
-    
+
     // Avoid empty message boxes
-    if(strlen(content) == 0) return;
-    
+    if (strlen(content) == 0) return;
+
     // Check if message count exceeds limit
     uint32_t child_count = lv_obj_get_child_cnt(content_);
     if (child_count >= MAX_MESSAGES) {
         // Delete the oldest message (first child)
-        lv_obj_t* first_child = lv_obj_get_child(content_, 0);
+        lv_obj_t *first_child = lv_obj_get_child(content_, 0);
         if (first_child != nullptr) {
             lv_obj_del(first_child);
         }
     }
-    
+
     // Collapse system messages (if the last message was also a system message)
     if (strcmp(role, "system") == 0 && child_count > 0) {
         // Get the last message container
-        lv_obj_t* last_container = lv_obj_get_child(content_, child_count - 1);
+        lv_obj_t *last_container = lv_obj_get_child(content_, child_count - 1);
         if (last_container != nullptr && lv_obj_get_child_cnt(last_container) > 0) {
             // Get the bubble inside the container
-            lv_obj_t* last_bubble = lv_obj_get_child(last_container, 0);
+            lv_obj_t *last_bubble = lv_obj_get_child(last_container, 0);
             if (last_bubble != nullptr) {
                 // Check bubble type
-                void* bubble_type_ptr = lv_obj_get_user_data(last_bubble);
-                if (bubble_type_ptr != nullptr && strcmp((const char*)bubble_type_ptr, "system") == 0) {
+                void *bubble_type_ptr = lv_obj_get_user_data(last_bubble);
+                if (bubble_type_ptr != nullptr && strcmp((const char *) bubble_type_ptr, "system") == 0) {
                     // If the last one was also a system message, delete the old one
                     lv_obj_del(last_container);
                 }
             }
         }
     }
-    
+
     // Create a message bubble
-    lv_obj_t* msg_bubble = lv_obj_create(content_);
+    lv_obj_t *msg_bubble = lv_obj_create(content_);
     lv_obj_set_style_radius(msg_bubble, 8, 0);
     lv_obj_set_scrollbar_mode(msg_bubble, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_border_width(msg_bubble, 1, 0);
@@ -523,7 +516,7 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_obj_clear_flag(msg_bubble, LV_OBJ_FLAG_CLICKABLE); // Cho phép click xuyên qua
 
     // Create the message text
-    lv_obj_t* msg_text = lv_label_create(msg_bubble);
+    lv_obj_t *msg_text = lv_label_create(msg_bubble);
     lv_label_set_text(msg_text, content);
 
     lv_obj_add_flag(msg_text, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -533,10 +526,10 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_coord_t text_width = lv_txt_get_width(content, strlen(content), fonts_.text_font, 0);
 
     // Calculate bubble width
-    lv_coord_t max_width = LV_HOR_RES * 85 / 100 - 16;  // 85% of screen width
-    lv_coord_t min_width = 20;  
+    lv_coord_t max_width = LV_HOR_RES * 85 / 100 - 16; // 85% of screen width
+    lv_coord_t min_width = 20;
     lv_coord_t bubble_width;
-    
+
     // Ensure text width is not smaller than min width
     if (text_width < min_width) {
         text_width = min_width;
@@ -544,13 +537,13 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
 
     // Use text width if smaller than max width
     if (text_width < max_width) {
-        bubble_width = text_width; 
+        bubble_width = text_width;
     } else {
         bubble_width = max_width;
     }
-    
+
     // Set message text width
-    lv_obj_set_width(msg_text, bubble_width);  // Minus padding
+    lv_obj_set_width(msg_text, bubble_width); // Minus padding
     lv_label_set_long_mode(msg_text, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(msg_text, fonts_.text_font, 0);
 
@@ -564,14 +557,14 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_set_style_bg_color(msg_bubble, current_theme_.user_bubble, 0);
         // Set text color for contrast
         lv_obj_set_style_text_color(msg_text, current_theme_.text, 0);
-        
+
         // Set user data to identify bubble type
-        lv_obj_set_user_data(msg_bubble, (void*)"user");
-        
+        lv_obj_set_user_data(msg_bubble, (void *) "user");
+
         // Set appropriate width for content
         lv_obj_set_width(msg_bubble, LV_SIZE_CONTENT);
         lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
-        
+
         // Don't grow
         lv_obj_set_style_flex_grow(msg_bubble, 0, 0);
     } else if (strcmp(role, "assistant") == 0) {
@@ -579,14 +572,14 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_set_style_bg_color(msg_bubble, current_theme_.assistant_bubble, 0);
         // Set text color for contrast
         lv_obj_set_style_text_color(msg_text, current_theme_.text, 0);
-        
+
         // Set user data to identify bubble type
-        lv_obj_set_user_data(msg_bubble, (void*)"assistant");
-        
+        lv_obj_set_user_data(msg_bubble, (void *) "assistant");
+
         // Set appropriate width for content
         lv_obj_set_width(msg_bubble, LV_SIZE_CONTENT);
         lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
-        
+
         // Don't grow
         lv_obj_set_style_flex_grow(msg_bubble, 0, 0);
     } else if (strcmp(role, "system") == 0) {
@@ -594,25 +587,25 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_set_style_bg_color(msg_bubble, current_theme_.system_bubble, 0);
         // Set text color for contrast
         lv_obj_set_style_text_color(msg_text, current_theme_.system_text, 0);
-        
+
         // Set user data to identify bubble type
-        lv_obj_set_user_data(msg_bubble, (void*)"system");
-        
+        lv_obj_set_user_data(msg_bubble, (void *) "system");
+
         // Set appropriate width for content
         lv_obj_set_width(msg_bubble, LV_SIZE_CONTENT);
         lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
-        
+
         // Don't grow
         lv_obj_set_style_flex_grow(msg_bubble, 0, 0);
     }
-    
+
     // Create a full-width container for user messages to ensure right alignment
     if (strcmp(role, "user") == 0) {
         // Create a full-width container
-        lv_obj_t* container = lv_obj_create(content_);
+        lv_obj_t *container = lv_obj_create(content_);
         lv_obj_set_width(container, LV_HOR_RES);
         lv_obj_set_height(container, LV_SIZE_CONTENT);
-        
+
         // Make container transparent and borderless
         lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(container, 0, 0);
@@ -624,18 +617,18 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
 
         // Move the message bubble into this container
         lv_obj_set_parent(msg_bubble, container);
-        
+
         // Right align the bubble in the container
         lv_obj_align(msg_bubble, LV_ALIGN_RIGHT_MID, -25, 0);
-        
+
         // Auto-scroll to this container
         lv_obj_scroll_to_view_recursive(container, LV_ANIM_ON);
     } else if (strcmp(role, "system") == 0) {
         // Create full-width container for system messages to ensure center alignment
-        lv_obj_t* container = lv_obj_create(content_);
+        lv_obj_t *container = lv_obj_create(content_);
         lv_obj_set_width(container, LV_HOR_RES);
         lv_obj_set_height(container, LV_SIZE_CONTENT);
-        
+
         // Make container transparent and borderless
         lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(container, 0, 0);
@@ -646,10 +639,10 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
 
         // 将消息气泡移入此容器
         lv_obj_set_parent(msg_bubble, container);
-        
+
         // Center align the bubble in the container
         lv_obj_align(msg_bubble, LV_ALIGN_CENTER, 0, 0);
-        
+
         // Auto-scroll bottom
         lv_obj_scroll_to_view_recursive(container, LV_ANIM_ON);
     } else {
@@ -660,52 +653,52 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         // Auto-scroll to the message bubble
         lv_obj_scroll_to_view_recursive(msg_bubble, LV_ANIM_ON);
     }
-    
+
     // Store reference to the latest message label
     chat_message_label_ = msg_text;
 }
 
-void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
+void LcdDisplay::SetPreviewImage(const lv_img_dsc_t *img_dsc) {
     DisplayLockGuard lock(this);
     if (content_ == nullptr) {
         return;
     }
-    
+
     if (img_dsc != nullptr) {
         // Create a message bubble for image preview
-        lv_obj_t* img_bubble = lv_obj_create(content_);
+        lv_obj_t *img_bubble = lv_obj_create(content_);
         lv_obj_set_style_radius(img_bubble, 8, 0);
         lv_obj_set_scrollbar_mode(img_bubble, LV_SCROLLBAR_MODE_OFF);
         lv_obj_set_style_border_width(img_bubble, 1, 0);
         lv_obj_set_style_border_color(img_bubble, current_theme_.border, 0);
         lv_obj_set_style_pad_all(img_bubble, 8, 0);
-        
+
         // Set image bubble background color (similar to system message)
         lv_obj_set_style_bg_color(img_bubble, current_theme_.assistant_bubble, 0);
-        
+
         // Set user data to identify bubble type
-        lv_obj_set_user_data(img_bubble, (void*)"image");
-        
+        lv_obj_set_user_data(img_bubble, (void *) "image");
+
         // Create the image object inside the bubble
-        lv_obj_t* preview_image = lv_image_create(img_bubble);
-        
+        lv_obj_t *preview_image = lv_image_create(img_bubble);
+
         // Copy the image descriptor and data to avoid source data changes
-        lv_img_dsc_t* copied_img_dsc = (lv_img_dsc_t*)heap_caps_malloc(sizeof(lv_img_dsc_t), MALLOC_CAP_8BIT);
+        lv_img_dsc_t *copied_img_dsc = (lv_img_dsc_t *) heap_caps_malloc(sizeof(lv_img_dsc_t), MALLOC_CAP_8BIT);
         if (copied_img_dsc == nullptr) {
             ESP_LOGE(TAG, "Failed to allocate memory for image descriptor");
             lv_obj_del(img_bubble);
             return;
         }
-        
+
         // Copy the header
         copied_img_dsc->header = img_dsc->header;
         copied_img_dsc->data_size = img_dsc->data_size;
-        
+
         // Copy the image data
-        uint8_t* copied_data = (uint8_t*)heap_caps_malloc(img_dsc->data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        uint8_t *copied_data = (uint8_t *) heap_caps_malloc(img_dsc->data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (copied_data == nullptr) {
             // Fallback to internal RAM if SPIRAM allocation fails
-            copied_data = (uint8_t*)heap_caps_malloc(img_dsc->data_size, MALLOC_CAP_8BIT);
+            copied_data = (uint8_t *) heap_caps_malloc(img_dsc->data_size, MALLOC_CAP_8BIT);
         }
         if (copied_data == nullptr) {
             ESP_LOGE(TAG, "Failed to allocate memory for image data (size: %lu bytes)", img_dsc->data_size);
@@ -713,52 +706,52 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
             lv_obj_del(img_bubble);
             return;
         }
-        
+
         memcpy(copied_data, img_dsc->data, img_dsc->data_size);
         copied_img_dsc->data = copied_data;
-        
+
         // Calculate appropriate size for the image
-        lv_coord_t max_width = LV_HOR_RES * 70 / 100;  // 70% of screen width
+        lv_coord_t max_width = LV_HOR_RES * 70 / 100; // 70% of screen width
         lv_coord_t max_height = LV_VER_RES * 50 / 100; // 50% of screen height
-        
+
         // Calculate zoom factor to fit within maximum dimensions
         lv_coord_t img_width = copied_img_dsc->header.w;
         lv_coord_t img_height = copied_img_dsc->header.h;
-        
+
         lv_coord_t zoom_w = (max_width * 256) / img_width;
         lv_coord_t zoom_h = (max_height * 256) / img_height;
         lv_coord_t zoom = (zoom_w < zoom_h) ? zoom_w : zoom_h;
-        
+
         // Ensure zoom doesn't exceed 256 (100%)
         if (zoom > 256) zoom = 256;
-        
+
         // Set image properties
         lv_image_set_src(preview_image, copied_img_dsc);
         lv_image_set_scale(preview_image, zoom);
-        
+
         // Add event handler to clean up copied data when image is deleted
-        lv_obj_add_event_cb(preview_image, [](lv_event_t* e) {
-            lv_img_dsc_t* copied_img_dsc = (lv_img_dsc_t*)lv_event_get_user_data(e);
+        lv_obj_add_event_cb(preview_image, [](lv_event_t *e) {
+            lv_img_dsc_t *copied_img_dsc = (lv_img_dsc_t *) lv_event_get_user_data(e);
             if (copied_img_dsc != nullptr) {
-                heap_caps_free((void*)copied_img_dsc->data);
+                heap_caps_free((void *) copied_img_dsc->data);
                 heap_caps_free(copied_img_dsc);
             }
-        }, LV_EVENT_DELETE, (void*)copied_img_dsc);
-        
+        }, LV_EVENT_DELETE, (void *) copied_img_dsc);
+
         // Calculate actual scaled image dimensions
         lv_coord_t scaled_width = (img_width * zoom) / 256;
         lv_coord_t scaled_height = (img_height * zoom) / 256;
-        
+
         // Set bubble size to be 16 pixels larger than the image (8 pixels on each side)
         lv_obj_set_width(img_bubble, scaled_width + 16);
         lv_obj_set_height(img_bubble, scaled_height + 16);
-        
+
         // Don't grow in flex layout
         lv_obj_set_style_flex_grow(img_bubble, 0, 0);
-        
+
         // Center the image within the bubble
         lv_obj_center(preview_image);
-        
+
         // Left align the image bubble like assistant messages
         lv_obj_align(img_bubble, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -791,7 +784,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_radius(status_bar_, 0, 0);
     lv_obj_set_style_bg_color(status_bar_, current_theme_.background, 0);
     lv_obj_set_style_text_color(status_bar_, current_theme_.text, 0);
-    
+
     /* Content */
     content_ = lv_obj_create(container_);
     lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_OFF);
@@ -854,22 +847,16 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_font(battery_label_, fonts_.icon_font, 0);
     lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
 
-    // Thêm Mic Level Bar vào Status Bar (Góc trái cạnh icon mạng)
+    // =======================Mic Level Bar ============================
     mic_level_bar_ = lv_bar_create(status_bar_);
-    lv_obj_set_size(mic_level_bar_, 30, 8);
+    lv_obj_set_size(mic_level_bar_, 30, 12);
     lv_bar_set_range(mic_level_bar_, 0, 100);
     lv_bar_set_value(mic_level_bar_, 0, LV_ANIM_OFF);
-
-    // CHỈNH SỬA TẠI ĐÂY ĐỂ XÓA PHẦN THỪA XÁM:
-    lv_obj_set_style_pad_all(mic_level_bar_, 0, LV_PART_MAIN); // Xóa padding của khung nền
-    lv_obj_set_style_flex_grow(mic_level_bar_, 0, 0);          // Ngăn flex kéo giãn
-
     lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREY), 0);
     lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
-
-    // Đảm bảo không có margin trái gây hiểu lầm là khoảng xám thừa
-    lv_obj_set_style_margin_left(mic_level_bar_, 0, 0);
-    lv_obj_set_style_margin_right(mic_level_bar_, 5, 0);
+    lv_obj_set_style_margin_left(mic_level_bar_, 5, 0);
+    lv_obj_set_style_margin_right(mic_level_bar_, 8, 0);
+    //===================================================================
 
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
@@ -884,12 +871,12 @@ void LcdDisplay::SetupUI() {
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
 }
 
-void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
+void LcdDisplay::SetPreviewImage(const lv_img_dsc_t *img_dsc) {
     DisplayLockGuard lock(this);
     if (preview_image_ == nullptr) {
         return;
     }
-    
+
     if (img_dsc != nullptr) {
         // zoom factor 0.5
         lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w);
@@ -910,7 +897,7 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
 }
 #endif
 
-void LcdDisplay::SetStatus(const char* status) {
+void LcdDisplay::SetStatus(const char *status) {
     DisplayLockGuard lock(this);
     if (status_label_ == nullptr) return;
 
@@ -920,19 +907,17 @@ void LcdDisplay::SetStatus(const char* status) {
     if (status != nullptr && Lang::Strings::HEARING_AID != nullptr &&
         strcmp(status, Lang::Strings::HEARING_AID) == 0) {
         lv_obj_set_style_text_color(status_label_, lv_color_hex(0x00FF00), 0);
-        } else {
-            lv_obj_set_style_text_color(status_label_, current_theme_.text, 0);
-        }
+    } else {
+        lv_obj_set_style_text_color(status_label_, current_theme_.text, 0);
+    }
 }
 
 void LcdDisplay::UpdateMicLevel(int level) {
     DisplayLockGuard lock(this);
     if (mic_level_bar_ != nullptr) {
         lv_bar_set_value(mic_level_bar_, std::clamp(level, 0, 100), LV_ANIM_OFF);
-        // Log debug cường độ nếu cần
-        if (level > 20) {
-             ESP_LOGD(TAG, "Mic Level: %d%%", level);
-        }
+
+        ESP_LOGD(TAG, "Mic Level: %d%%", level);
     }
 }
 
@@ -956,10 +941,10 @@ void LcdDisplay::SetSttMode(bool enable) {
     }
 }
 
-void LcdDisplay::SetEmotion(const char* emotion) {
+void LcdDisplay::SetEmotion(const char *emotion) {
     struct Emotion {
-        const char* icon;
-        const char* text;
+        const char *icon;
+        const char *text;
     };
 
     static const std::vector<Emotion> emotions = {
@@ -985,11 +970,11 @@ void LcdDisplay::SetEmotion(const char* emotion) {
         {"😜", "silly"},
         {"🙄", "confused"}
     };
-    
+
     // Find matching emotion
     std::string_view emotion_view(emotion);
     auto it = std::find_if(emotions.begin(), emotions.end(),
-        [&emotion_view](const Emotion& e) { return e.text == emotion_view; });
+                           [&emotion_view](const Emotion &e) { return e.text == emotion_view; });
 
     DisplayLockGuard lock(this);
     if (emotion_label_ == nullptr) {
@@ -1013,7 +998,7 @@ void LcdDisplay::SetEmotion(const char* emotion) {
 #endif
 }
 
-void LcdDisplay::SetIcon(const char* icon) {
+void LcdDisplay::SetIcon(const char *icon) {
     DisplayLockGuard lock(this);
     if (emotion_label_ == nullptr) {
         return;
@@ -1030,9 +1015,9 @@ void LcdDisplay::SetIcon(const char* icon) {
 #endif
 }
 
-void LcdDisplay::SetTheme(const std::string& theme_name) {
+void LcdDisplay::SetTheme(const std::string &theme_name) {
     DisplayLockGuard lock(this);
-    
+
     if (theme_name == "dark" || theme_name == "DARK") {
         current_theme_ = DARK_THEME;
     } else if (theme_name == "light" || theme_name == "LIGHT") {
@@ -1042,25 +1027,25 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
         ESP_LOGE(TAG, "Invalid theme name: %s", theme_name.c_str());
         return;
     }
-    
+
     // Get the active screen
-    lv_obj_t* screen = lv_screen_active();
-    
+    lv_obj_t *screen = lv_screen_active();
+
     // Update the screen colors
     lv_obj_set_style_bg_color(screen, current_theme_.background, 0);
     lv_obj_set_style_text_color(screen, current_theme_.text, 0);
-    
+
     // Update container colors
     if (container_ != nullptr) {
         lv_obj_set_style_bg_color(container_, current_theme_.background, 0);
         lv_obj_set_style_border_color(container_, current_theme_.border, 0);
     }
-    
+
     // Update status bar colors
     if (status_bar_ != nullptr) {
         lv_obj_set_style_bg_color(status_bar_, current_theme_.background, 0);
         lv_obj_set_style_text_color(status_bar_, current_theme_.text, 0);
-        
+
         // Update status bar elements
         if (network_label_ != nullptr) {
             lv_obj_set_style_text_color(network_label_, current_theme_.text, 0);
@@ -1081,22 +1066,22 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
             lv_obj_set_style_text_color(emotion_label_, current_theme_.text, 0);
         }
     }
-    
+
     // Update content area colors
     if (content_ != nullptr) {
         lv_obj_set_style_bg_color(content_, current_theme_.chat_background, 0);
         lv_obj_set_style_border_color(content_, current_theme_.border, 0);
-        
+
         // If we have the chat message style, update all message bubbles
 #if CONFIG_USE_WECHAT_MESSAGE_STYLE
         // Iterate through all children of content (message containers or bubbles)
         uint32_t child_count = lv_obj_get_child_cnt(content_);
         for (uint32_t i = 0; i < child_count; i++) {
-            lv_obj_t* obj = lv_obj_get_child(content_, i);
+            lv_obj_t *obj = lv_obj_get_child(content_, i);
             if (obj == nullptr) continue;
-            
-            lv_obj_t* bubble = nullptr;
-            
+
+            lv_obj_t *bubble = nullptr;
+
             // Check if this object is a container or a bubble
             // If it's a container (user or system messages), get its child as bubble
             // If it's a bubble (assistant messages), use it directly
@@ -1115,31 +1100,31 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
                 // No children, might be other UI element, skip
                 continue;
             }
-            
+
             if (bubble == nullptr) continue;
-            
+
             // Use saved user data to identify bubble type
-            void* bubble_type_ptr = lv_obj_get_user_data(bubble);
+            void *bubble_type_ptr = lv_obj_get_user_data(bubble);
             if (bubble_type_ptr != nullptr) {
-                const char* bubble_type = static_cast<const char*>(bubble_type_ptr);
-                
+                const char *bubble_type = static_cast<const char *>(bubble_type_ptr);
+
                 // Apply correct color based on bubble type
                 if (strcmp(bubble_type, "user") == 0) {
                     lv_obj_set_style_bg_color(bubble, current_theme_.user_bubble, 0);
                 } else if (strcmp(bubble_type, "assistant") == 0) {
-                    lv_obj_set_style_bg_color(bubble, current_theme_.assistant_bubble, 0); 
+                    lv_obj_set_style_bg_color(bubble, current_theme_.assistant_bubble, 0);
                 } else if (strcmp(bubble_type, "system") == 0) {
                     lv_obj_set_style_bg_color(bubble, current_theme_.system_bubble, 0);
                 } else if (strcmp(bubble_type, "image") == 0) {
                     lv_obj_set_style_bg_color(bubble, current_theme_.system_bubble, 0);
                 }
-                
+
                 // Update border color
                 lv_obj_set_style_border_color(bubble, current_theme_.border, 0);
-                
+
                 // Update text color for the message
                 if (lv_obj_get_child_cnt(bubble) > 0) {
-                    lv_obj_t* text = lv_obj_get_child(bubble, 0);
+                    lv_obj_t *text = lv_obj_get_child(bubble, 0);
                     if (text != nullptr) {
                         // Set text color based on bubble type
                         if (strcmp(bubble_type, "system") == 0) {
@@ -1153,20 +1138,20 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
                 // If no tag, fallback to previous logic (color comparison)
                 // ...retain original fallback logic...
                 lv_color_t bg_color = lv_obj_get_style_bg_color(bubble, 0);
-            
+
                 // Improved bubble type detection logic, not just color comparison
                 bool is_user_bubble = false;
                 bool is_assistant_bubble = false;
                 bool is_system_bubble = false;
-            
+
                 // Check user bubble
-                if (lv_color_eq(bg_color, DARK_USER_BUBBLE_COLOR) || 
+                if (lv_color_eq(bg_color, DARK_USER_BUBBLE_COLOR) ||
                     lv_color_eq(bg_color, LIGHT_USER_BUBBLE_COLOR) ||
                     lv_color_eq(bg_color, current_theme_.user_bubble)) {
                     is_user_bubble = true;
                 }
                 // Check system bubble
-                else if (lv_color_eq(bg_color, DARK_SYSTEM_BUBBLE_COLOR) || 
+                else if (lv_color_eq(bg_color, DARK_SYSTEM_BUBBLE_COLOR) ||
                          lv_color_eq(bg_color, LIGHT_SYSTEM_BUBBLE_COLOR) ||
                          lv_color_eq(bg_color, current_theme_.system_bubble)) {
                     is_system_bubble = true;
@@ -1175,7 +1160,7 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
                 else {
                     is_assistant_bubble = true;
                 }
-            
+
                 // Apply correct color based on bubble type
                 if (is_user_bubble) {
                     lv_obj_set_style_bg_color(bubble, current_theme_.user_bubble, 0);
@@ -1184,17 +1169,17 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
                 } else if (is_system_bubble) {
                     lv_obj_set_style_bg_color(bubble, current_theme_.system_bubble, 0);
                 }
-                
+
                 // Update border color
                 lv_obj_set_style_border_color(bubble, current_theme_.border, 0);
-                
+
                 // Update text color for the message
                 if (lv_obj_get_child_cnt(bubble) > 0) {
-                    lv_obj_t* text = lv_obj_get_child(bubble, 0);
+                    lv_obj_t *text = lv_obj_get_child(bubble, 0);
                     if (text != nullptr) {
                         // Fallback to color detection logic
                         if (lv_color_eq(bg_color, current_theme_.system_bubble) ||
-                            lv_color_eq(bg_color, DARK_SYSTEM_BUBBLE_COLOR) || 
+                            lv_color_eq(bg_color, DARK_SYSTEM_BUBBLE_COLOR) ||
                             lv_color_eq(bg_color, LIGHT_SYSTEM_BUBBLE_COLOR)) {
                             lv_obj_set_style_text_color(text, current_theme_.system_text, 0);
                         } else {
@@ -1209,13 +1194,13 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
         if (chat_message_label_ != nullptr) {
             lv_obj_set_style_text_color(chat_message_label_, current_theme_.text, 0);
         }
-        
+
         if (emotion_label_ != nullptr) {
             lv_obj_set_style_text_color(emotion_label_, current_theme_.text, 0);
         }
 #endif
     }
-    
+
     // Update low battery popup
     if (low_battery_popup_ != nullptr) {
         lv_obj_set_style_bg_color(low_battery_popup_, current_theme_.low_battery, 0);

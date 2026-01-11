@@ -48,9 +48,6 @@ private:
     bool stt_only_active_ = false;
     bool current_ps_mode_ = false;
 
-    // Đối tượng thanh hiển thị cường độ mic
-    lv_obj_t* mic_level_bar_ = nullptr;
-
     void ActionToggleChat() {
         auto &app = Application::GetInstance();
         ESP_LOGI(TAG, "Chat Action: Toggle chat state (Current device state: %d)", app.GetDeviceState());
@@ -219,19 +216,6 @@ private:
             .font_24 = &font_viet_24
             });
 
-        // Tạo thanh Mic Level trên Status Bar
-        lvgl_port_lock(0);
-        lv_obj_t* status_bar = display_->GetStatusBarObject();
-        if (status_bar != nullptr) {
-            mic_level_bar_ = lv_bar_create(status_bar);
-            lv_obj_set_size(mic_level_bar_, 45, 10);
-            lv_obj_align(mic_level_bar_, LV_ALIGN_LEFT_MID, 10, 0);
-            lv_bar_set_range(mic_level_bar_, 0, 100);
-            lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREY), 0);
-            lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_LIGHT_GREEN), LV_PART_INDICATOR);
-            lv_obj_set_style_radius(mic_level_bar_, 5, 0);
-        }
-        lvgl_port_unlock();
     }
 
     void InitializeButtons() {
@@ -366,12 +350,9 @@ public:
         return true;
     }
 
-    // Hàm cập nhật mic level để hiển thị lên LVGL Bar
     void UpdateMicLevel(int level) {
-        if (mic_level_bar_ != nullptr) {
-            lvgl_port_lock(0);
-            lv_bar_set_value(mic_level_bar_, level, LV_ANIM_OFF);
-            lvgl_port_unlock();
+        if (display_ != nullptr) {
+            display_->UpdateMicLevel(level);
         }
     }
 };

@@ -53,7 +53,7 @@ protected:
 public:
     ~LcdDisplay();
     lv_obj_t *GetContentObject() const { return content_; }
-    lv_obj_t *GetStatusBarObject() const { return mic_level_bar_; }
+
 
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetIcon(const char* icon) override;
