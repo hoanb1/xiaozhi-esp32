@@ -357,7 +357,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_flex_flow(status_bar_, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_all(status_bar_, 0, 0);
     lv_obj_set_style_border_width(status_bar_, 0, 0);
-    lv_obj_set_style_pad_column(status_bar_, 0, 0);
+    lv_obj_set_style_pad_column(status_bar_, 5, 0); // Tăng column gap để các icon không dính nhau
     lv_obj_set_style_pad_left(status_bar_, 10, 0);
     lv_obj_set_style_pad_right(status_bar_, 10, 0);
     lv_obj_set_style_pad_top(status_bar_, 2, 0);
@@ -397,6 +397,23 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_font(battery_label_, fonts_.icon_font, 0);
     lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
     lv_obj_set_style_margin_left(battery_label_, 5, 0); // Add left margin
+
+    // Thêm Mic Level Bar vào Status Bar (Góc trái cạnh icon mạng)
+    mic_level_bar_ = lv_bar_create(status_bar_);
+    lv_obj_set_size(mic_level_bar_, 30, 8);
+    lv_bar_set_range(mic_level_bar_, 0, 100);
+    lv_bar_set_value(mic_level_bar_, 0, LV_ANIM_OFF);
+
+    // CHỈNH SỬA TẠI ĐÂY ĐỂ XÓA PHẦN THỪA XÁM:
+    lv_obj_set_style_pad_all(mic_level_bar_, 0, LV_PART_MAIN); // Xóa padding của khung nền
+    lv_obj_set_style_flex_grow(mic_level_bar_, 0, 0);          // Ngăn flex kéo giãn
+
+    lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
+
+    // Đảm bảo không có margin trái gây hiểu lầm là khoảng xám thừa
+    lv_obj_set_style_margin_left(mic_level_bar_, 0, 0);
+    lv_obj_set_style_margin_right(mic_level_bar_, 5, 0);
 
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
@@ -837,6 +854,23 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_font(battery_label_, fonts_.icon_font, 0);
     lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
 
+    // Thêm Mic Level Bar vào Status Bar (Góc trái cạnh icon mạng)
+    mic_level_bar_ = lv_bar_create(status_bar_);
+    lv_obj_set_size(mic_level_bar_, 30, 8);
+    lv_bar_set_range(mic_level_bar_, 0, 100);
+    lv_bar_set_value(mic_level_bar_, 0, LV_ANIM_OFF);
+
+    // CHỈNH SỬA TẠI ĐÂY ĐỂ XÓA PHẦN THỪA XÁM:
+    lv_obj_set_style_pad_all(mic_level_bar_, 0, LV_PART_MAIN); // Xóa padding của khung nền
+    lv_obj_set_style_flex_grow(mic_level_bar_, 0, 0);          // Ngăn flex kéo giãn
+
+    lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
+
+    // Đảm bảo không có margin trái gây hiểu lầm là khoảng xám thừa
+    lv_obj_set_style_margin_left(mic_level_bar_, 0, 0);
+    lv_obj_set_style_margin_right(mic_level_bar_, 5, 0);
+
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_size(low_battery_popup_, LV_HOR_RES * 0.9, fonts_.text_font->line_height * 2);
@@ -889,6 +923,17 @@ void LcdDisplay::SetStatus(const char* status) {
         } else {
             lv_obj_set_style_text_color(status_label_, current_theme_.text, 0);
         }
+}
+
+void LcdDisplay::UpdateMicLevel(int level) {
+    DisplayLockGuard lock(this);
+    if (mic_level_bar_ != nullptr) {
+        lv_bar_set_value(mic_level_bar_, std::clamp(level, 0, 100), LV_ANIM_OFF);
+        // Log debug cường độ nếu cần
+        if (level > 20) {
+             ESP_LOGD(TAG, "Mic Level: %d%%", level);
+        }
+    }
 }
 
 void LcdDisplay::SetSttMode(bool enable) {

@@ -28,9 +28,7 @@
 #include <hal/adc_types.h>
 #include <driver/i2c.h>
 
-
 #define TAG "FreenoveESP32S3Display"
-
 
 LV_FONT_DECLARE(font_awesome_16_4);
 LV_FONT_DECLARE(font_viet_16);
@@ -41,15 +39,17 @@ class FreenoveESP32S3Display : public WifiBoard {
 private:
     Button boot_button_;
     LcdDisplay *display_ = nullptr;
-    i2c_master_bus_handle_t codec_i2c_bus_ = nullptr; // Khởi tạo null
+    i2c_master_bus_handle_t codec_i2c_bus_ = nullptr;
     i2c_master_dev_handle_t touch_dev_handle_ = nullptr;
     bool touch_initialized_ = false;
 
     int last_battery_level_ = 0;
-
     bool last_charging_state_ = false;
     bool stt_only_active_ = false;
     bool current_ps_mode_ = false;
+
+    // Đối tượng thanh hiển thị cường độ mic
+    lv_obj_t* mic_level_bar_ = nullptr;
 
     void ActionToggleChat() {
         auto &app = Application::GetInstance();
@@ -218,6 +218,20 @@ private:
             .font_20 = &font_viet_20,
             .font_24 = &font_viet_24
             });
+
+        // Tạo thanh Mic Level trên Status Bar
+        lvgl_port_lock(0);
+        lv_obj_t* status_bar = display_->GetStatusBarObject();
+        if (status_bar != nullptr) {
+            mic_level_bar_ = lv_bar_create(status_bar);
+            lv_obj_set_size(mic_level_bar_, 45, 10);
+            lv_obj_align(mic_level_bar_, LV_ALIGN_LEFT_MID, 10, 0);
+            lv_bar_set_range(mic_level_bar_, 0, 100);
+            lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_bg_color(mic_level_bar_, lv_palette_main(LV_PALETTE_LIGHT_GREEN), LV_PART_INDICATOR);
+            lv_obj_set_style_radius(mic_level_bar_, 5, 0);
+        }
+        lvgl_port_unlock();
     }
 
     void InitializeButtons() {
@@ -280,7 +294,6 @@ public:
     AudioCodec *GetAudioCodec() override {
         static Es8311AudioCodec *codec = nullptr;
         if (codec == nullptr) {
-            // Đảm bảo codec_i2c_bus_ không null trước khi khởi tạo
             if (codec_i2c_bus_ == nullptr) {
                 ESP_LOGE(TAG, "I2C bus not initialized, cannot create AudioCodec");
                 return nullptr;
@@ -288,6 +301,11 @@ public:
             codec = new Es8311AudioCodec(codec_i2c_bus_, AUDIO_CODEC_I2C_NUM, AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
             AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, true, true);
+
+            // ĐĂNG KÝ CALLBACK ĐỂ NHẬN MIC LEVEL TỪ CODEC
+            codec->SetInputLevelCallback([this](int level) {
+                this->UpdateMicLevel(level);
+            });
         }
         return codec;
     }
@@ -346,6 +364,15 @@ public:
         charging = last_charging_state_;
         discharging = !charging;
         return true;
+    }
+
+    // Hàm cập nhật mic level để hiển thị lên LVGL Bar
+    void UpdateMicLevel(int level) {
+        if (mic_level_bar_ != nullptr) {
+            lvgl_port_lock(0);
+            lv_bar_set_value(mic_level_bar_, level, LV_ANIM_OFF);
+            lvgl_port_unlock();
+        }
     }
 };
 

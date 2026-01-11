@@ -35,6 +35,7 @@ protected:
     lv_obj_t* container_ = nullptr;
     lv_obj_t* side_bar_ = nullptr;
     lv_obj_t* preview_image_ = nullptr;
+    lv_obj_t* mic_level_bar_ = nullptr;
 
     DisplayFonts fonts_;
     ThemeColors current_theme_;
@@ -52,6 +53,7 @@ protected:
 public:
     ~LcdDisplay();
     lv_obj_t *GetContentObject() const { return content_; }
+    lv_obj_t *GetStatusBarObject() const { return mic_level_bar_; }
 
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetIcon(const char* icon) override;
@@ -68,6 +70,7 @@ public:
     void SetSttMode(bool enable) override;
     virtual void SetFontSize(int size) override;
     virtual int GetFontSize() override { return current_font_size_; }
+    virtual void UpdateMicLevel(int level);
 
 };
 
@@ -116,4 +119,5 @@ public:
                       DisplayFonts fonts);
 
 };
+
 #endif // LCD_DISPLAY_H
