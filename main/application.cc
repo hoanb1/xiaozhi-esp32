@@ -173,8 +173,8 @@ void Application::CheckNewVersion(Ota &ota) {
             wake_word_->StopDetection();
             // Pre-close audio output to avoid audio operations during upgrade
             auto codec = board.GetAudioCodec();
-            if (codec->input_enabled()) codec->EnableInput(false);
-            if (codec->output_enabled()) codec->EnableOutput(false);
+            codec->EnableInput(false);
+            codec->EnableOutput(false);
 
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -685,13 +685,24 @@ void Application::Start() {
         }
     });
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
-        ESP_LOGI(TAG, "[Protocol] Audio channel opened (SR: %d)", protocol_->server_sample_rate());
+        int server_sr = protocol_->server_sample_rate();
+        ESP_LOGI(TAG, "[Protocol] Audio channel opened (SR: %d)", server_sr);
         board.SetPowerSaveMode(false);
-        if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
-            ESP_LOGW(
-                TAG,
-                "[Audio] SR mismatch! Server: %d vs Device: %d",
-                protocol_->server_sample_rate(), codec->output_sample_rate());
+
+        // Dynamic Sample Rate Switching
+        if (server_sr != codec->output_sample_rate()) {
+            ESP_LOGW(TAG, "[Audio] SR mismatch! Server: %d vs Device: %d. Switching hardware...", server_sr, codec->output_sample_rate());
+
+            // 1. Thay đổi SR phần cứng
+            codec->SetOutputSampleRate(server_sr);
+
+            // 2. QUAN TRỌNG: Cấu hình lại các bộ Resampler cho đường MIC Input ngay lập tức
+            // Nếu không cấu hình lại, hàm ReadAudio sẽ sử dụng tỉ lệ cũ dẫn đến lỗi chia cho 0
+            if (codec->input_sample_rate() != AUDIO_MODEL_SAMPLE_RATE) {
+                ESP_LOGI(TAG, "[Audio] Syncing Input Resamplers to new HW rate: %d", codec->input_sample_rate());
+                input_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+                reference_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+            }
         }
 
 #if CONFIG_IOT_PROTOCOL_XIAOZHI
@@ -947,7 +958,7 @@ void Application::OnAudioOutput() {
         if (device_state_ == kDeviceStateIdle) {
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_output_time_).count();
             if (duration > max_silence_seconds) {
-                if (codec->output_enabled()) codec->EnableOutput(false);
+                codec->EnableOutput(false);
             }
         }
         return;
@@ -971,6 +982,8 @@ void Application::OnAudioOutput() {
         if (!opus_decoder_->Decode(std::move(packet.payload), pcm)) {
             return;
         }
+
+        // Dynamic switching should handle most cases, but keep resampler as safety
         if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
             int target_size = output_resampler_.GetOutputSamples(pcm.size());
             std::vector<int16_t> resampled(target_size);
@@ -987,7 +1000,7 @@ void Application::OnAudioOutput() {
 }
 
 void Application::OnAudioInput() {
-    auto codec = Board::GetInstance().GetAudioCodec();
+    //auto codec = Board::GetInstance().GetAudioCodec();
 
     // 1. Handling Audio Testing Mode (If applicable)
     if (device_state_ == kDeviceStateAudioTesting) {
@@ -996,8 +1009,6 @@ void Application::OnAudioInput() {
             return;
         }
         std::vector<int16_t> data;
-        // Use AUDIO_MODEL_SAMPLE_RATE (16kHz) for testing?
-        // Or hardware rate? Let's assume 16kHz for simplicity in test engine
         int samples = OPUS_FRAME_DURATION_MS * AUDIO_MODEL_SAMPLE_RATE / 1000;
         if (ReadAudio(data, AUDIO_MODEL_SAMPLE_RATE, samples)) {
             background_task_->Schedule([this, data = std::move(data)]() mutable {
@@ -1123,8 +1134,9 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetEmotion("neutral");
             audio_processor_->Stop();
 
-            if (codec->output_enabled()) codec->EnableOutput(false);
-            if (!codec->input_enabled()) codec->EnableInput(true);
+            // Half-duplex: Idle - Bật Mic (chờ wake word), Tắt Loa
+            codec->EnableInput(true);
+            codec->EnableOutput(false);
 
             wake_word_->StartDetection();
             break;
@@ -1138,8 +1150,9 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
 
-            if (codec->output_enabled()) codec->EnableOutput(false);
-            if (!codec->input_enabled()) codec->EnableInput(true);
+            // Half-duplex: Listening - Tắt Loa, Bật Mic
+            codec->EnableOutput(false);
+            codec->EnableInput(true);
 
             if (!audio_processor_->IsRunning()) {
                 protocol_->SendStartListening(listening_mode_);
@@ -1153,8 +1166,9 @@ void Application::SetDeviceState(DeviceState state) {
             if (stt_only_mode_) {
                 device_state_ = kDeviceStateListening;
 
-                if (codec->output_enabled()) codec->EnableOutput(false);
-                if (!codec->input_enabled()) codec->EnableInput(true);
+                // Half-duplex (STT Mode): Tắt Loa, Bật Mic
+                codec->EnableOutput(false);
+                codec->EnableInput(true);
 
                 if (!audio_processor_->IsRunning()) {
                     protocol_->SendStartListening(listening_mode_);
@@ -1167,8 +1181,9 @@ void Application::SetDeviceState(DeviceState state) {
             }
             display->SetStatus(Lang::Strings::SPEAKING);
 
-            if (codec->input_enabled()) codec->EnableInput(false);
-            if (!codec->output_enabled()) codec->EnableOutput(true);
+            // Half-duplex: Speaking - Tắt Mic, Bật Loa
+            codec->EnableInput(false);
+            codec->EnableOutput(true);
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_processor_->Stop();
@@ -1179,8 +1194,8 @@ void Application::SetDeviceState(DeviceState state) {
 
         case kDeviceStateAudioTesting:
             display->SetStatus("Testing mode");
-            if (!codec->input_enabled()) codec->EnableInput(true);
-            if (codec->output_enabled()) codec->EnableOutput(false);
+            codec->EnableInput(true);
+            codec->EnableOutput(false);
 
             wake_word_->StopDetection();
             audio_processor_->Stop();
@@ -1188,8 +1203,8 @@ void Application::SetDeviceState(DeviceState state) {
 
         case kDeviceStateUpgrading:
             display->SetStatus(Lang::Strings::UPGRADING);
-            if (codec->input_enabled()) codec->EnableInput(false);
-            if (codec->output_enabled()) codec->EnableOutput(false);
+            codec->EnableInput(false);
+            codec->EnableOutput(false);
             break;
 
         case kDeviceStateActivating:
@@ -1199,8 +1214,8 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateFatalError:
             display->SetStatus(Lang::Strings::ERROR);
             display->SetEmotion("sad");
-            if (codec->input_enabled()) codec->EnableInput(false);
-            if (codec->output_enabled()) codec->EnableOutput(false);
+            codec->EnableInput(false);
+            codec->EnableOutput(false);
             break;
 
         default:
@@ -1222,13 +1237,24 @@ void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
         return;
     }
 
-    ESP_LOGD(TAG, "[Audio] Decoder SR: %d, Duration: %dms", sample_rate, frame_duration);
+    ESP_LOGI(TAG, "[Audio] Switching hardware Sample Rate to: %d Hz", sample_rate);
+
+    std::lock_guard<std::mutex> lock(mutex_);
     opus_decoder_.reset();
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(sample_rate, 1, frame_duration);
 
     auto codec = Board::GetInstance().GetAudioCodec();
+    // Đồng bộ phần cứng codec với Sample Rate mới từ Server
+    codec->SetOutputSampleRate(sample_rate);
+
+    if (codec->input_sample_rate() != AUDIO_MODEL_SAMPLE_RATE) {
+        ESP_LOGI(TAG, "[Audio] Reconfiguring Input Resamplers: %d -> %d", codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+        input_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+        reference_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+    }
+
     if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
-        ESP_LOGD(TAG, "[Audio] Output resampling: %d -> %d", opus_decoder_->sample_rate(), codec->output_sample_rate());
+        ESP_LOGD(TAG, "[Audio] Fallback resampling needed: %d -> %d", opus_decoder_->sample_rate(), codec->output_sample_rate());
         output_resampler_.Configure(opus_decoder_->sample_rate(), codec->output_sample_rate());
     }
 }

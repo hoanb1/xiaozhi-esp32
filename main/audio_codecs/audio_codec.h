@@ -29,6 +29,8 @@ public:
 
     virtual void EnableInput(bool enable);
     virtual void EnableOutput(bool enable);
+    
+    virtual void SetOutputSampleRate(int sample_rate) { output_sample_rate_ = sample_rate; }
 
     virtual void OutputData(std::vector<int16_t>& data);
     virtual bool InputData(std::vector<int16_t>& data);

@@ -134,10 +134,10 @@ private:
 
     std::unique_ptr<OpusEncoderWrapper> opus_encoder_;
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
-
     OpusResampler input_resampler_;
     OpusResampler reference_resampler_;
     OpusResampler output_resampler_;
+    int last_input_sample_rate_ = 0;  // Track last input sample rate for resampler reinitialization
 
     void MainEventLoop();
     void OnAudioInput();

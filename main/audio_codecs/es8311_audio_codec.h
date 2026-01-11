@@ -19,6 +19,8 @@ private:
     esp_codec_dev_handle_t dev_ = nullptr;
     gpio_num_t pa_pin_ = GPIO_NUM_NC;
     bool pa_inverted_ = false;
+    bool rx_enabled_ = false;  // Track if RX channel is enabled
+    bool tx_enabled_ = false;  // Track if TX channel is enabled
     std::function<void(int)> on_input_level_ = nullptr;
 
     void CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din);
@@ -39,6 +41,7 @@ public:
 
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+    virtual void SetOutputSampleRate(int sample_rate) override;
     
     // Input level monitoring
     void SetInputLevelCallback(std::function<void(int)> callback) {
