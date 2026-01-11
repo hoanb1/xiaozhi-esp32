@@ -47,7 +47,38 @@ private:
     bool last_charging_state_ = false;
     bool stt_only_active_ = false;
 
-    /* ================= TOUCH ================= */
+    /* ================= UNIFIED ACTIONS (Đồng bộ nút & cảm ứng) ================= */
+
+    void ActionToggleChat() {
+        auto &app = Application::GetInstance();
+        if (app.GetDeviceState() == kDeviceStateStarting &&
+            !WifiStation::GetInstance().IsConnected()) {
+            ESP_LOGI(TAG, "Starting state and no WiFi: Resetting configuration");
+            ResetWifiConfiguration();
+            return;
+        }
+        ESP_LOGI(TAG, "Action: Toggle chat state");
+        app.ToggleChatState();
+    }
+
+    void ActionToggleSttMode() {
+        auto &app = Application::GetInstance();
+        stt_only_active_ = !stt_only_active_;
+        ESP_LOGI(TAG, "Action: STT Only Mode %s", stt_only_active_ ? "ON" : "OFF");
+        app.SetSttOnlyMode(stt_only_active_);
+    }
+
+    void ActionToggleAudioTesting() {
+        auto &app = Application::GetInstance();
+        ESP_LOGI(TAG, "Action: Toggle Audio Testing");
+        if (app.GetDeviceState() == kDeviceStateAudioTesting) {
+            app.ExitAudioTestingMode();
+        } else {
+            app.EnterAudioTestingMode();
+        }
+    }
+
+    /* ================= TOUCH HELPERS ================= */
 
     bool ReadTouchRegister(uint8_t reg, uint8_t *data, size_t len) {
         if (!touch_initialized_ && reg != FT6336_FIRMWARE_ID) return false;
@@ -112,7 +143,6 @@ private:
             ESP_LOGI(TAG, "Touch OK, chip=0x%02X", id);
             touch_initialized_ = true;
         }
-
         WriteTouchRegister(FT6336_CTRL, 0x00);
         WriteTouchRegister(FT6336_THRESHOLD, 0x14);
     }
@@ -131,14 +161,46 @@ private:
         }
     }
 
-    /* ================= CLICK CONTENT ================= */
+    /* ================= TOUCH EVENT HANDLERS ================= */
 
-    static void OnContentClicked(lv_event_t *) {
-        ESP_LOGI(TAG, "CONTENT CLICKED -> TOGGLE CHAT");
-        Application::GetInstance().ToggleChatState();
+    static void OnTouchEvents(lv_event_t *e) {
+        auto *self = static_cast<FreenoveESP32S3Display *>(lv_event_get_user_data(e));
+        lv_event_code_t code = lv_event_get_code(e);
+
+        if (code == LV_EVENT_CLICKED) {
+            static uint32_t last_click_time = 0;
+            uint32_t current_time = lv_tick_get();
+
+            // Nhận diện Double Click thủ công (350ms)
+            if (current_time - last_click_time < 350) {
+                ESP_LOGI(TAG, "Touch: Double Click Detected -> Toggle STT Mode");
+                self->ActionToggleSttMode();
+                last_click_time = 0;
+            } else {
+                last_click_time = current_time;
+                ESP_LOGI(TAG, "Touch: Single Click Detected -> Toggle Chat");
+                self->ActionToggleChat();
+            }
+        } else if (code == LV_EVENT_LONG_PRESSED) {
+            ESP_LOGI(TAG, "Touch: Long Press Detected -> Toggle STT Mode");
+            self->ActionToggleSttMode();
+            }
+        // GESTURE đã được loại bỏ để tránh chồng lấn sự kiện
     }
 
-    /* ================= INIT HW ================= */
+    /* ================= HARDWARE INIT ================= */
+
+    void InitializeI2c() {
+        ESP_LOGI(TAG, "Initializing I2C master bus...");
+        i2c_master_bus_config_t cfg = {
+            .i2c_port = AUDIO_CODEC_I2C_NUM,
+            .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
+            .scl_io_num = AUDIO_CODEC_I2C_SCL_PIN,
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .flags = {.enable_internal_pullup = 1},
+        };
+        ESP_ERROR_CHECK(i2c_new_master_bus(&cfg, &codec_i2c_bus_));
+    }
 
     void InitializeSpi() {
         spi_bus_config_t cfg = {};
@@ -150,6 +212,7 @@ private:
         ESP_ERROR_CHECK(
             spi_bus_initialize(LCD_SPI_HOST, &cfg, SPI_DMA_CH_AUTO));
     }
+
 
     void InitializeLcdDisplay() {
         ESP_LOGI(TAG, "Creating ILI9341 LCD panel...");
@@ -190,61 +253,26 @@ private:
             {
                 .text_font = &font_viet_20,
                 .icon_font = &font_awesome_16_4,
-                .emoji_font = DISPLAY_HEIGHT >= 240
-                                  ? font_emoji_64_init()
-                                  : font_emoji_32_init(),
+                .emoji_font = DISPLAY_HEIGHT >= 240 ? font_emoji_64_init() : font_emoji_32_init()
             });
-    }
-
-    void InitializeI2c() {
-        ESP_LOGI(TAG, "Initializing I2C master bus...");
-        i2c_master_bus_config_t cfg = {
-            .i2c_port = AUDIO_CODEC_I2C_NUM,
-            .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
-            .scl_io_num = AUDIO_CODEC_I2C_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .flags = {.enable_internal_pullup = 1},
-        };
-        ESP_ERROR_CHECK(i2c_new_master_bus(&cfg, &codec_i2c_bus_));
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto &app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting &&
-                !WifiStation::GetInstance().IsConnected()) {
-                ESP_LOGI(TAG, "Starting state and no WiFi: Resetting configuration");
-                ResetWifiConfiguration();
-                return;
-            }
-            ESP_LOGI(TAG, "Boot button Click: Toggle chat state");
-            app.ToggleChatState();
+            ActionToggleChat();
         });
 
         boot_button_.OnLongPress([this]() {
-            auto &app = Application::GetInstance();
-            stt_only_active_ = !stt_only_active_;
-            ESP_LOGI(TAG, "Boot button LongPress: STT Only Mode %s", stt_only_active_ ? "ON" : "OFF");
-            app.SetSttOnlyMode(stt_only_active_);
+            ActionToggleSttMode();
         });
 
         boot_button_.OnDoubleClick([this]() {
-            auto &app = Application::GetInstance();
-            stt_only_active_ = !stt_only_active_;
-            ESP_LOGI(TAG, "Boot button DoubleClick: STT Only Mode %s", stt_only_active_ ? "ON" : "OFF");
-            app.SetSttOnlyMode(stt_only_active_);
+            ActionToggleSttMode();
         });
 
         boot_button_.OnMultipleClick([this]() {
-           auto &app = Application::GetInstance();
-           ESP_LOGI(TAG, "Boot button OnMultipleClick 3: Toggle Audio Testing");
-
-           if (app.GetDeviceState() == kDeviceStateAudioTesting) {
-               app.ExitAudioTestingMode();
-           } else {
-               app.EnterAudioTestingMode();
-           }
-       },3);
+            ActionToggleAudioTesting();
+        }, 3);
     }
 
 public:
@@ -267,13 +295,10 @@ public:
             lv_obj_t *content = display_->GetContentObject();
 
             lv_obj_add_flag(content, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_scroll_dir(content, LV_DIR_VER); // Cho phép cuộn dọc ổn định
 
-            lv_obj_add_event_cb(
-                content,
-                OnContentClicked,
-                LV_EVENT_CLICKED,
-                nullptr);
-
+            // Chỉ đăng ký các sự kiện Click và Long Press
+            lv_obj_add_event_cb(content, OnTouchEvents, LV_EVENT_ALL, this);
             lvgl_port_unlock();
         }
 
@@ -310,23 +335,20 @@ public:
     }
 
     void SetPowerSaveMode(bool enable) override {
-        // Luôn cập nhật trạng thái WiFi
         WifiBoard::SetPowerSaveMode(enable);
 
         auto backlight = GetBacklight();
         if (backlight) {
             if (enable) {
-                // Dimming stage: Giảm xuống mức cực thấp (10%) để tiết kiệm điện
-                // nhưng người dùng vẫn thấy mờ mờ là máy đang chạy.
                 ESP_LOGI(TAG, "PowerSave: Dimming screen to 10%%");
                 backlight->SetBrightness(10);
             } else {
-                // Active stage: Quay lại độ sáng tối đa
                 ESP_LOGI(TAG, "PowerSave: Restoring screen to 100%%");
                 backlight->SetBrightness(100);
             }
         }
     }
+
     bool GetBatteryLevel(
         int &level, bool &charging, bool &discharging) override {
         static uint32_t last_check = 0;
@@ -352,11 +374,8 @@ public:
 
             int adc_raw = 0;
             if (adc_oneshot_read(handle, ADC_CHANNEL_8, &adc_raw) == ESP_OK) {
-                int mv = (adc_raw * 3300) / 4095;
-                int real_mv = mv * 2;
-                if (real_mv >= 4150) level = 100;
-                else if (real_mv <= 3500) level = 0;
-                else level = (real_mv - 3500) / 6.5;
+                int real_mv = ((adc_raw * 3300) / 4095) * 2;
+                level = (real_mv >= 4150) ? 100 : (real_mv <= 3500 ? 0 : (real_mv - 3500) / 6.5);
                 last_battery_level_ = level;
             }
             adc_oneshot_del_unit(handle);
