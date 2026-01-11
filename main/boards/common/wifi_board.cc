@@ -220,6 +220,15 @@ std::string WifiBoard::GetDeviceStatusJson() {
     }
     cJSON_AddItemToObject(root, "audio_speaker", audio_speaker);
 
+    // --- MỚI THÊM: Microphone Status ---
+    auto microphone = cJSON_CreateObject();
+    if (audio_codec) {
+        // Lấy mic_gain từ codec và thêm vào JSON
+        cJSON_AddNumberToObject(microphone, "gain", audio_codec->mic_gain());
+    }
+    cJSON_AddItemToObject(root, "microphone", microphone);
+    // ------------------------------------
+
     // Screen brightness
     auto backlight = board.GetBacklight();
     auto screen = cJSON_CreateObject();

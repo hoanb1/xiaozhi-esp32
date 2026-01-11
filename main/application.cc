@@ -65,11 +65,6 @@ Application::Application() {
 
     battery_save_mode_ = true;
 
-    // --- CỜ ĐIỀU KHIỂN LOGIC ---
-    // true: Tắt mic khi đang phát loa (Half-duplex)
-    // false: Luôn bật mic (Full-duplex / AEC)
-    mute_mic_while_speaking_ = true;
-
 #if CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
     ESP_LOGI(TAG, "[Init] AEC Mode: Device Side");
@@ -327,7 +322,7 @@ void Application::EnterAudioTestingMode() {
 
 void Application::ExitAudioTestingMode() {
     ESP_LOGI(TAG, "[Mode] Exiting audio testing");
-    SetDeviceState(kDeviceStateWifiConfiguring);
+    SetDeviceState(kDeviceStateSpeaking);
     std::lock_guard<std::mutex> lock(mutex_);
     audio_decode_queue_ = std::move(audio_testing_queue_);
     audio_decode_cv_.notify_all();
@@ -930,7 +925,7 @@ void Application::AudioLoop() {
     auto codec = Board::GetInstance().GetAudioCodec();
     ESP_LOGI(TAG, "Audio task loop started");
     while (true) {
-            OnAudioInput();
+        OnAudioInput();
         if (codec->output_enabled()) {
             OnAudioOutput();
         }
@@ -1021,7 +1016,6 @@ void Application::OnAudioInput() {
     // 2. Local Processing: Wake Word & AFE (Must be 16kHz)
     if (wake_word_->IsDetectionRunning() || audio_processor_->IsRunning()) {
         std::vector<int16_t> data_16k;
-        // Get the required samples based on engine's feed size
         int samples_needed = wake_word_->IsDetectionRunning() ? wake_word_->GetFeedSize() : audio_processor_->GetFeedSize();
 
         if (samples_needed > 0) {
@@ -1108,19 +1102,19 @@ void Application::SetDeviceState(DeviceState state) {
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s -> %s", STATE_STRINGS[old_state], STATE_STRINGS[device_state_]);
 
+    auto &board = Board::GetInstance();
+    auto display = board.GetDisplay();
+    auto led = board.GetLed();
+    auto codec = board.GetAudioCodec();
+    led->OnStateChanged();
+
     if (state != kDeviceStateIdle && state != kDeviceStateUnknown && state != kDeviceStateStarting) {
-        Board::GetInstance().SetPowerSaveMode(false);
+        board.SetPowerSaveMode(false);
     }
 
     if (!stt_only_mode_) {
         background_task_->WaitForCompletion();
     }
-
-    auto &board = Board::GetInstance();
-    auto display = board.GetDisplay();
-    auto led = board.GetLed();
-    auto codec = board.GetAudioCodec(); // Lấy codec để điều khiển microphone
-    led->OnStateChanged();
 
     switch (state) {
         case kDeviceStateIdle:
@@ -1128,9 +1122,9 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetEmotion("neutral");
             audio_processor_->Stop();
 
-            // Ở trạng thái nghỉ: Luôn bật Microphone để chờ Wake Word
+            // Half-duplex: Idle - Bật Mic (chờ wake word), Tắt Loa
             codec->EnableInput(true);
-            codec->EnableOutput(false); // Đảm bảo PA loa tắt khi nghỉ
+            codec->EnableOutput(false);
 
             wake_word_->StartDetection();
             break;
@@ -1143,11 +1137,12 @@ void Application::SetDeviceState(DeviceState state) {
 
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
-            if (!audio_processor_->IsRunning()) {
-                // Đang nghe: Bật Microphone, Tắt PA loa để tránh nhiễu
-                codec->EnableOutput(false);
-                codec->EnableInput(true);
 
+            // Half-duplex: Listening - Tắt Loa, Bật Mic
+            codec->EnableOutput(false);
+            codec->EnableInput(true);
+
+            if (!audio_processor_->IsRunning()) {
                 protocol_->SendStartListening(listening_mode_);
                 opus_encoder_->ResetState();
                 audio_processor_->Start();
@@ -1158,9 +1153,12 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateSpeaking:
             if (stt_only_mode_) {
                 device_state_ = kDeviceStateListening;
+
+                // Half-duplex (STT Mode): Tắt Loa, Bật Mic
+                codec->EnableOutput(false);
+                codec->EnableInput(true);
+
                 if (!audio_processor_->IsRunning()) {
-                    codec->EnableOutput(false);
-                    codec->EnableInput(true);
                     protocol_->SendStartListening(listening_mode_);
                     opus_encoder_->ResetState();
                     audio_processor_->Start();
@@ -1171,23 +1169,39 @@ void Application::SetDeviceState(DeviceState state) {
             }
             display->SetStatus(Lang::Strings::SPEAKING);
 
-            // XỬ LÝ RESET DECODER TRƯỚC (Vì nó chứa EnableOutput nội bộ)
-            ResetDecoder();
-
-            // SAU ĐÓ MỚI ÁP DỤNG LOGIC MUTE MIC
-            if (mute_mic_while_speaking_) {
-                ESP_LOGI(TAG, "Muting microphone and Enabling PA for speaking");
-                codec->EnableInput(false);
-            }
-            codec->EnableOutput(true); // Bật PA loa để nói
+            // Half-duplex: Speaking - Tắt Mic, Bật Loa
+            codec->EnableInput(false);
+            codec->EnableOutput(true);
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_processor_->Stop();
                 wake_word_->StartDetection();
             }
+            ResetDecoder();
+            break;
+
+        case kDeviceStateAudioTesting:
+            display->SetStatus("Testing mode");
+            codec->EnableInput(true);
+            codec->EnableOutput(false);
+
+            wake_word_->StopDetection();
+            audio_processor_->Stop();
             break;
 
         case kDeviceStateUpgrading:
+            display->SetStatus(Lang::Strings::UPGRADING);
+            codec->EnableInput(false);
+            codec->EnableOutput(false);
+            break;
+
+        case kDeviceStateActivating:
+            display->SetStatus(Lang::Strings::ACTIVATION);
+            break;
+
+        case kDeviceStateFatalError:
+            display->SetStatus(Lang::Strings::ERROR);
+            display->SetEmotion("sad");
             codec->EnableInput(false);
             codec->EnableOutput(false);
             break;
@@ -1204,7 +1218,6 @@ void Application::ResetDecoder() {
     audio_decode_queue_.clear();
     audio_decode_cv_.notify_all();
     last_output_time_ = std::chrono::steady_clock::now();
-    // Bỏ codec->EnableOutput(true) ở đây để quản lý tập trung tại SetDeviceState
 }
 
 void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
