@@ -41,7 +41,7 @@ class FreenoveESP32S3Display : public WifiBoard {
 private:
     Button boot_button_;
     LcdDisplay *display_ = nullptr;
-    i2c_master_bus_handle_t codec_i2c_bus_;
+    i2c_master_bus_handle_t codec_i2c_bus_ = nullptr; // Khởi tạo null
     i2c_master_dev_handle_t touch_dev_handle_ = nullptr;
     bool touch_initialized_ = false;
 
@@ -49,16 +49,13 @@ private:
 
     bool last_charging_state_ = false;
     bool stt_only_active_ = false;
-    bool current_ps_mode_ = false; // Tracks current PowerSave state to prevent log spam
-
-    /* ================= ACTION LOGIC ================= */
+    bool current_ps_mode_ = false;
 
     void ActionToggleChat() {
         auto &app = Application::GetInstance();
         ESP_LOGI(TAG, "Chat Action: Toggle chat state (Current device state: %d)", app.GetDeviceState());
         if (app.GetDeviceState() == kDeviceStateStarting &&
             !WifiStation::GetInstance().IsConnected()) {
-            ESP_LOGW(TAG, "Device starting without WiFi - resetting configuration");
             ResetWifiConfiguration();
             return;
         }
@@ -75,27 +72,18 @@ private:
     void ActionToggleAudioTesting() {
         auto &app = Application::GetInstance();
         bool entering = app.GetDeviceState() != kDeviceStateAudioTesting;
-        ESP_LOGI(TAG, "Mode Change: %s audio testing mode", entering ? "Entering" : "Exiting");
         if (entering) app.EnterAudioTestingMode();
         else app.ExitAudioTestingMode();
     }
 
-    /* ================= TOUCH HELPERS ================= */
-
     bool ReadTouchRegister(uint8_t reg, uint8_t *data, size_t len) {
         if (!touch_initialized_ && reg != FT6336_FIRMWARE_ID) return false;
-        esp_err_t ret = i2c_master_transmit_receive(touch_dev_handle_, &reg, 1, data, len, -1);
-        if (ret != ESP_OK) {
-            ESP_LOGV(TAG, "Touch I2C error at reg 0x%02X", reg);
-        }
-        return ret == ESP_OK;
+        return i2c_master_transmit_receive(touch_dev_handle_, &reg, 1, data, len, -1) == ESP_OK;
     }
 
     bool WriteTouchRegister(uint8_t reg, uint8_t value) {
         uint8_t buf[2] = {reg, value};
-        esp_err_t ret = i2c_master_transmit(
-            touch_dev_handle_, buf, 2, -1);
-        return ret == ESP_OK;
+        return i2c_master_transmit(touch_dev_handle_, buf, 2, -1) == ESP_OK;
     }
 
     bool ReadTouchPoint(uint16_t &x, uint16_t &y) {
@@ -116,25 +104,18 @@ private:
     }
 
     void InitializeTouch() {
-        ESP_LOGI(TAG, "Initializing FT6336 Touch on I2C address 0x%02X", FT6336_ADDR);
+        if (codec_i2c_bus_ == nullptr) return;
+
         i2c_device_config_t cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = FT6336_ADDR,
             .scl_speed_hz = 400000,
         };
-
-        if (i2c_master_bus_add_device(codec_i2c_bus_, &cfg,
-                                      &touch_dev_handle_) != ESP_OK) {
-            ESP_LOGE(TAG, "Hardware Error: Failed to add touch device to I2C bus");
-            return;
-        }
-
+        if (i2c_master_bus_add_device(codec_i2c_bus_, &cfg, &touch_dev_handle_) != ESP_OK) return;
         uint8_t id;
         if (ReadTouchRegister(FT6336_FIRMWARE_ID, &id, 1)) {
-            ESP_LOGI(TAG, "Touch Chip identified successfully. Firmware ID: 0x%02X", id);
+            ESP_LOGI(TAG, "Touch Chip identified: 0x%02X", id);
             touch_initialized_ = true;
-        } else {
-            ESP_LOGE(TAG, "Hardware Error: Touch chip FT6336 not responding");
         }
         WriteTouchRegister(FT6336_CTRL, 0x00);
         WriteTouchRegister(FT6336_THRESHOLD, 0x14);
@@ -162,49 +143,39 @@ private:
             static uint32_t last_click = 0;
             uint32_t now = lv_tick_get();
             if (now - last_click < 350) {
-                ESP_LOGI(TAG, "Touch Event: Double Click");
                 self->ActionToggleSttMode();
                 last_click = 0;
             } else {
                 last_click = now;
-                ESP_LOGI(TAG, "Touch Event: Single Click");
                 self->ActionToggleChat();
             }
-        } else if (code == LV_EVENT_LONG_PRESSED) {
-            ESP_LOGI(TAG, "Touch Event: Long Press");
-            self->ActionToggleSttMode();
         }
     }
 
-    /* ================= HARDWARE INIT ================= */
-
     void InitializeI2c() {
-        ESP_LOGI(TAG, "Initializing I2C Master Bus (SDA: %d, SCL: %d)", AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN);
         i2c_master_bus_config_t cfg = {
             .i2c_port = AUDIO_CODEC_I2C_NUM,
             .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
             .scl_io_num = AUDIO_CODEC_I2C_SCL_PIN,
             .clk_source = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
             .flags = {.enable_internal_pullup = 1},
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&cfg, &codec_i2c_bus_));
     }
 
     void InitializeSpi() {
-        ESP_LOGI(TAG, "Initializing SPI Bus (MOSI: %d, MISO: %d, SCLK: %d)", DISPLAY_MOSI_PIN, DISPLAY_MIS0_PIN, DISPLAY_SCK_PIN);
         spi_bus_config_t cfg = {};
         cfg.mosi_io_num = DISPLAY_MOSI_PIN;
         cfg.miso_io_num = DISPLAY_MIS0_PIN;
         cfg.sclk_io_num = DISPLAY_SCK_PIN;
-        cfg.max_transfer_sz =
-                DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
+        cfg.max_transfer_sz = DISPLAY_WIDTH * 10 * sizeof(uint16_t);
         ESP_ERROR_CHECK(
             spi_bus_initialize(LCD_SPI_HOST, &cfg, SPI_DMA_CH_AUTO));
     }
 
 
     void InitializeLcdDisplay() {
-        ESP_LOGI(TAG, "Initializing ILI9341 Display Panel (CS: %d, DC: %d, RST: %d)", DISPLAY_CS_PIN, DISPLAY_DC_PIN, DISPLAY_RST_PIN);
         esp_lcd_panel_io_handle_t io = nullptr;
         esp_lcd_panel_handle_t panel = nullptr;
 
@@ -247,11 +218,9 @@ private:
             .font_20 = &font_viet_20,
             .font_24 = &font_viet_24
             });
-        ESP_LOGI(TAG, "Display object created successfully");
     }
 
     void InitializeButtons() {
-        ESP_LOGI(TAG, "Configuring Boot Button (GPIO: %d)", BOOT_BUTTON_GPIO);
         boot_button_.OnClick([this]() {
             ActionToggleChat();
         });
@@ -271,7 +240,6 @@ private:
 
 public:
     FreenoveESP32S3Display() : boot_button_(BOOT_BUTTON_GPIO) {
-        ESP_LOGI(TAG, "Freenove Board Initialization Start");
         InitializeI2c();
         InitializeSpi();
         InitializeTouch();
@@ -294,12 +262,9 @@ public:
 
             lv_obj_add_event_cb(content, OnTouchEvents, LV_EVENT_ALL, this);
             lvgl_port_unlock();
-            ESP_LOGI(TAG, "LVGL Touch interface registered");
         }
 
         GetBacklight()->SetBrightness(100);
-        current_ps_mode_ = false; // Initial state is full brightness
-        ESP_LOGI(TAG, "Freenove Board Initialization Complete");
     }
 
     ~FreenoveESP32S3Display() {
@@ -313,10 +278,18 @@ public:
     }
 
     AudioCodec *GetAudioCodec() override {
-        static Es8311AudioCodec codec(codec_i2c_bus_, AUDIO_CODEC_I2C_NUM, AUDIO_INPUT_SAMPLE_RATE,
+        static Es8311AudioCodec *codec = nullptr;
+        if (codec == nullptr) {
+            // Đảm bảo codec_i2c_bus_ không null trước khi khởi tạo
+            if (codec_i2c_bus_ == nullptr) {
+                ESP_LOGE(TAG, "I2C bus not initialized, cannot create AudioCodec");
+                return nullptr;
+            }
+            codec = new Es8311AudioCodec(codec_i2c_bus_, AUDIO_CODEC_I2C_NUM, AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
             AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, true, true);
-        return &codec;
+        }
+        return codec;
     }
 
     Display *GetDisplay() override { return display_; }
@@ -328,15 +301,11 @@ public:
     }
 
     void SetPowerSaveMode(bool enable) override {
-        if (current_ps_mode_ == enable) return; // Silent if no state change
-
+        if (current_ps_mode_ == enable) return;
         WifiBoard::SetPowerSaveMode(enable);
 
         auto backlight = GetBacklight();
-        if (backlight) {
-            ESP_LOGI(TAG, "PowerSave Mode: %s (Brightness set to %d%%)", enable ? "ENABLED" : "DISABLED", enable ? 10 : 100);
-            backlight->SetBrightness(enable ? 10 : 100);
-        }
+        if (backlight) backlight->SetBrightness(enable ? 10 : 100);
         current_ps_mode_ = enable;
     }
 

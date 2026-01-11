@@ -303,7 +303,7 @@ void Application::PlaySound(const std::string_view &sound) {
 
         auto payload_size = ntohs(p3->payload_size);
         AudioStreamPacket packet;
-        packet.sample_rate = 16000;
+        packet.sample_rate = AUDIO_FILE_SAMPLE_RATE;
         packet.frame_duration = 60;
         packet.payload.resize(payload_size);
         memcpy(packet.payload.data(), p3->payload, payload_size);
@@ -603,24 +603,27 @@ void Application::Start() {
     auto display = board.GetDisplay();
     auto codec = board.GetAudioCodec();
 
-    ESP_LOGI(TAG, "[Audio] Initializing Opus Codecs...");
+    ESP_LOGI(TAG, "[Audio] Hardware SR: Out=%d, In=%d", codec->output_sample_rate(), codec->input_sample_rate());
+
+    // Server communication uses Hardware Sample Rate (e.g., 24kHz)
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
-    opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
+    opus_encoder_ = std::make_unique<OpusEncoderWrapper>(codec->input_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
 
     if (aec_mode_ != kAecOff) {
-        ESP_LOGI(TAG, "[Audio] AEC active (%d), complexity=0", aec_mode_);
+        ESP_LOGD(TAG, "[Audio] AEC active (%d), complexity=0", aec_mode_);
         opus_encoder_->SetComplexity(0);
     } else if (board.GetBoardType() == "ml307") {
-        ESP_LOGI(TAG, "[Audio] ML307 detected, complexity=5");
+        ESP_LOGD(TAG, "[Audio] ML307 detected, complexity=5");
         opus_encoder_->SetComplexity(5);
     } else {
         opus_encoder_->SetComplexity(0);
     }
 
-    if (codec->input_sample_rate() != 16000) {
-        ESP_LOGI(TAG, "[Audio] Resampler: %d -> 16000", codec->input_sample_rate());
-        input_resampler_.Configure(codec->input_sample_rate(), 16000);
-        reference_resampler_.Configure(codec->input_sample_rate(), 16000);
+    // Local AI Model / Wake word requires 16kHz
+    if (codec->input_sample_rate() != AUDIO_MODEL_SAMPLE_RATE) {
+        ESP_LOGI(TAG, "[Audio] Local Resampler: %d -> %d", codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+        input_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+        reference_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
     }
     codec->Start();
 
@@ -736,6 +739,7 @@ void Application::Start() {
                 return;
             }
         }
+        // Encode and send audio at hardware sample rate (e.g. 24kHz)
         background_task_->Schedule([this, data = std::move(data)]() mutable {
             opus_encoder_->Encode(std::move(data), [this](std::vector<uint8_t> &&opus) {
                 AudioStreamPacket packet;
@@ -767,7 +771,7 @@ void Application::Start() {
     });
     audio_processor_->OnVadStateChange([this](bool speaking) {
         if (device_state_ == kDeviceStateListening) {
-            ESP_LOGD(TAG, "[Audio] VAD: %s", speaking ? "Speaking" : "Silence");
+            ESP_LOGV(TAG, "[Audio] VAD: %s", speaking ? "Speaking" : "Silence");
             Schedule([this, speaking]() {
                 voice_detected_ = speaking;
                 auto led = Board::GetInstance().GetLed();
@@ -982,20 +986,25 @@ void Application::OnAudioOutput() {
 }
 
 void Application::OnAudioInput() {
+    auto codec = Board::GetInstance().GetAudioCodec();
+
+    // 1. Handling Audio Testing Mode (If applicable)
     if (device_state_ == kDeviceStateAudioTesting) {
         if (audio_testing_queue_.size() >= AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS) {
             ExitAudioTestingMode();
             return;
         }
         std::vector<int16_t> data;
-        int samples = OPUS_FRAME_DURATION_MS * 16000 / 1000;
-        if (ReadAudio(data, 16000, samples)) {
+        // Use AUDIO_MODEL_SAMPLE_RATE (16kHz) for testing?
+        // Or hardware rate? Let's assume 16kHz for simplicity in test engine
+        int samples = OPUS_FRAME_DURATION_MS * AUDIO_MODEL_SAMPLE_RATE / 1000;
+        if (ReadAudio(data, AUDIO_MODEL_SAMPLE_RATE, samples)) {
             background_task_->Schedule([this, data = std::move(data)]() mutable {
                 opus_encoder_->Encode(std::move(data), [this](std::vector<uint8_t> &&opus) {
                     AudioStreamPacket packet;
                     packet.payload = std::move(opus);
                     packet.frame_duration = OPUS_FRAME_DURATION_MS;
-                    packet.sample_rate = 16000;
+                    packet.sample_rate = AUDIO_MODEL_SAMPLE_RATE;
                     std::lock_guard<std::mutex> lock(mutex_);
                     audio_testing_queue_.push_back(std::move(packet));
                 });
@@ -1004,24 +1013,16 @@ void Application::OnAudioInput() {
         }
     }
 
-    if (wake_word_->IsDetectionRunning()) {
-        std::vector<int16_t> data;
-        int samples = wake_word_->GetFeedSize();
-        if (samples > 0) {
-            if (ReadAudio(data, 16000, samples)) {
-                wake_word_->Feed(data);
-                return;
-            }
-        }
-    }
+    // 2. Local Processing: Wake Word & AFE (Must be 16kHz)
+    if (wake_word_->IsDetectionRunning() || audio_processor_->IsRunning()) {
+        std::vector<int16_t> data_16k;
+        // Get the required samples based on engine's feed size
+        int samples_needed = wake_word_->IsDetectionRunning() ? wake_word_->GetFeedSize() : audio_processor_->GetFeedSize();
 
-    if (audio_processor_->IsRunning()) {
-        std::vector<int16_t> data;
-        int samples = audio_processor_->GetFeedSize();
-        if (samples > 0) {
-            if (ReadAudio(data, 16000, samples)) {
-                audio_processor_->Feed(data);
-                return;
+        if (samples_needed > 0) {
+            if (ReadAudio(data_16k, AUDIO_MODEL_SAMPLE_RATE, samples_needed)) {
+                if (wake_word_->IsDetectionRunning()) wake_word_->Feed(data_16k);
+                if (audio_processor_->IsRunning()) audio_processor_->Feed(data_16k);
             }
         }
     }
@@ -1035,11 +1036,15 @@ bool Application::ReadAudio(std::vector<int16_t> &data, int sample_rate, int sam
         return false;
     }
 
+    // Determine how many hardware samples we need to read
     if (codec->input_sample_rate() != sample_rate) {
+        // Resampling needed (usually from 24kHz hardware to 16kHz engine)
         data.resize(samples * codec->input_sample_rate() / sample_rate);
         if (!codec->InputData(data)) {
             return false;
         }
+
+        // Handling Multi-channel if necessary
         if (codec->input_channels() == 2) {
             auto mic_channel = std::vector<int16_t>(data.size() / 2);
             auto reference_channel = std::vector<int16_t>(data.size() / 2);
@@ -1059,11 +1064,13 @@ bool Application::ReadAudio(std::vector<int16_t> &data, int sample_rate, int sam
                 data[j + 1] = resampled_reference[i];
             }
         } else {
+            // Mono Resampling 24k -> 16k
             auto resampled = std::vector<int16_t>(input_resampler_.GetOutputSamples(data.size()));
             input_resampler_.Process(data.data(), data.size(), resampled.data());
             data = std::move(resampled);
         }
     } else {
+        // Direct read (Usually 24kHz for Server or 16kHz if hardware matches)
         data.resize(samples);
         if (!codec->InputData(data)) {
             return false;
@@ -1089,9 +1096,7 @@ void Application::SetListeningMode(ListeningMode mode) {
 }
 
 void Application::SetDeviceState(DeviceState state) {
-    if (device_state_ == state) {
-        return;
-    }
+    if (device_state_ == state) return;
 
     DeviceState old_state = device_state_;
     clock_ticks_ = 0;
@@ -1111,7 +1116,6 @@ void Application::SetDeviceState(DeviceState state) {
     auto led = board.GetLed();
     led->OnStateChanged();
     switch (state) {
-        case kDeviceStateUnknown:
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
@@ -1120,18 +1124,12 @@ void Application::SetDeviceState(DeviceState state) {
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
-            display->SetEmotion("neutral");
             display->SetChatMessage("system", "");
             timestamp_queue_.clear();
             break;
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
-            display->SetEmotion("neutral");
-#if CONFIG_IOT_PROTOCOL_XIAOZHI
-            UpdateIotStates();
-#endif
             if (!audio_processor_->IsRunning()) {
-                ESP_LOGI(TAG, "[Audio] Opening channel & starting processor");
                 protocol_->SendStartListening(listening_mode_);
                 opus_encoder_->ResetState();
                 audio_processor_->Start();
@@ -1140,28 +1138,21 @@ void Application::SetDeviceState(DeviceState state) {
             break;
         case kDeviceStateSpeaking:
             if (stt_only_mode_) {
-                ESP_LOGI(TAG, "[STT-Only] Jump SPEAKING -> LISTENING");
-                Schedule([this]() {
-                    device_state_ = kDeviceStateListening;
-                    if (!audio_processor_->IsRunning()) {
-                        protocol_->SendStartListening(listening_mode_);
-                        opus_encoder_->ResetState();
-                        audio_processor_->Start();
-                        wake_word_->StopDetection();
-                    }
-                    Board::GetInstance().GetLed()->OnStateChanged();
-                });
+                device_state_ = kDeviceStateListening;
+                if (!audio_processor_->IsRunning()) {
+                    protocol_->SendStartListening(listening_mode_);
+                    opus_encoder_->ResetState();
+                    audio_processor_->Start();
+                    wake_word_->StopDetection();
+                }
+                led->OnStateChanged(); // Cập nhật lại đèn cho trạng thái mới
                 break;
             }
             display->SetStatus(Lang::Strings::SPEAKING);
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_processor_->Stop();
-#if CONFIG_USE_AFE_WAKE_WORD
                 wake_word_->StartDetection();
-#else
-                wake_word_->StopDetection();
-#endif
             }
             ResetDecoder();
             break;
@@ -1171,7 +1162,7 @@ void Application::SetDeviceState(DeviceState state) {
 }
 
 void Application::ResetDecoder() {
-    ESP_LOGD(TAG, "[Audio] Resetting decoder");
+    ESP_LOGV(TAG, "[Audio] Resetting decoder");
     std::lock_guard<std::mutex> lock(mutex_);
     opus_decoder_->ResetState();
     audio_decode_queue_.clear();
@@ -1186,13 +1177,13 @@ void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
         return;
     }
 
-    ESP_LOGI(TAG, "[Audio] Decoder SR: %d, Duration: %dms", sample_rate, frame_duration);
+    ESP_LOGD(TAG, "[Audio] Decoder SR: %d, Duration: %dms", sample_rate, frame_duration);
     opus_decoder_.reset();
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(sample_rate, 1, frame_duration);
 
     auto codec = Board::GetInstance().GetAudioCodec();
     if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
-        ESP_LOGI(TAG, "[Audio] Output resampling: %d -> %d", opus_decoder_->sample_rate(), codec->output_sample_rate());
+        ESP_LOGD(TAG, "[Audio] Output resampling: %d -> %d", opus_decoder_->sample_rate(), codec->output_sample_rate());
         output_resampler_.Configure(opus_decoder_->sample_rate(), codec->output_sample_rate());
     }
 }
