@@ -31,8 +31,11 @@
 
 #define TAG "FreenoveESP32S3Display"
 
-LV_FONT_DECLARE(font_viet_20);
+
 LV_FONT_DECLARE(font_awesome_16_4);
+LV_FONT_DECLARE(font_viet_16);
+LV_FONT_DECLARE(font_viet_20);
+LV_FONT_DECLARE(font_viet_24);
 
 class FreenoveESP32S3Display : public WifiBoard {
 private:
@@ -46,6 +49,7 @@ private:
 
     bool last_charging_state_ = false;
     bool stt_only_active_ = false;
+    bool current_ps_mode_ = false; // Tracks current PowerSave state to prevent log spam
 
     /* ================= ACTION LOGIC ================= */
 
@@ -236,9 +240,12 @@ private:
             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
             DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
             {
-                .text_font = &font_viet_20,
+            .text_font = &font_viet_20,
                 .icon_font = &font_awesome_16_4,
-                .emoji_font = DISPLAY_HEIGHT >= 240 ? font_emoji_64_init() : font_emoji_32_init()
+            .emoji_font = DISPLAY_HEIGHT >= 240 ? font_emoji_64_init() : font_emoji_32_init(),
+            .font_16 = &font_viet_16,
+            .font_20 = &font_viet_20,
+            .font_24 = &font_viet_24
             });
         ESP_LOGI(TAG, "Display object created successfully");
     }
@@ -291,6 +298,7 @@ public:
         }
 
         GetBacklight()->SetBrightness(100);
+        current_ps_mode_ = false; // Initial state is full brightness
         ESP_LOGI(TAG, "Freenove Board Initialization Complete");
     }
 
@@ -320,6 +328,8 @@ public:
     }
 
     void SetPowerSaveMode(bool enable) override {
+        if (current_ps_mode_ == enable) return; // Silent if no state change
+
         WifiBoard::SetPowerSaveMode(enable);
 
         auto backlight = GetBacklight();
@@ -327,6 +337,7 @@ public:
             ESP_LOGI(TAG, "PowerSave Mode: %s (Brightness set to %d%%)", enable ? "ENABLED" : "DISABLED", enable ? 10 : 100);
             backlight->SetBrightness(enable ? 10 : 100);
         }
+        current_ps_mode_ = enable;
     }
 
     bool GetBatteryLevel(

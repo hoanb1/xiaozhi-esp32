@@ -1,3 +1,5 @@
+// File: main/mcp_server.cc
+
 /*
  * MCP Server Implementation
  * Reference: https://modelcontextprotocol.io/specification/2024-11-05
@@ -63,14 +65,13 @@ void McpServer::AddCommonTools() {
             }),
             [&board](const PropertyList &properties) -> ReturnValue {
                 auto codec = board.GetAudioCodec();
-                // Lưu ý: Cần đảm bảo AudioCodec đã có hàm SetMicGain (xem bước 2)
                 codec->SetMicGain(properties["gain"].value<int>());
                 return true;
             });
     AddTool("self.hearing_aid.set_mode",
-         "Enable or disable Hearing Aid mode (also known as STT Only Mode or Subtitle Mode). \n" // Thêm keyword
+         "Enable or disable Hearing Aid mode (Subtitle Mode). \n"
          "When enabled, the device continuously listens and displays text on the screen without speaking back (No TTS).\n"
-         "Use this tool when user says: 'bật chế độ trợ thính', 'hiện phụ đề', 'không nghe rõ', 'disable tts', 'turn on hearing aid'.", // Thêm ví dụ tiếng Việt
+         "Use this tool when user says: 'bật chế độ trợ thính', 'hiện phụ đề', 'không nghe rõ', 'disable tts', 'turn on hearing aid'.",
          PropertyList({
              Property("enable", kPropertyTypeBoolean)
          }),
@@ -95,7 +96,8 @@ void McpServer::AddCommonTools() {
     }
 
     auto display = board.GetDisplay();
-    if (display && !display->GetTheme().empty()) {
+    if (display) {
+        if (!display->GetTheme().empty()) {
         AddTool("self.screen.set_theme",
                 "Set the theme of the screen. The theme can be `light` or `dark`.",
                 PropertyList({
@@ -103,6 +105,21 @@ void McpServer::AddCommonTools() {
                 }),
                 [display](const PropertyList &properties) -> ReturnValue {
                     display->SetTheme(properties["theme"].value<std::string>().c_str());
+                    return true;
+                });
+    }
+
+        // --- NEW TOOL: SET FONT SIZE ---
+        AddTool("self.screen.set_font_size",
+                "Change the font size of the text on the display. \n"
+                "Available sizes: 16 (Small/Nhỏ), 20 (Normal/Vừa), 24 (Large/To).\n"
+                "Use this tool when user says: 'tăng kích thước chữ', 'chữ to lên', 'giảm cỡ chữ', 'chữ nhỏ lại', 'phóng to phông chữ', 'change font size'.",
+                PropertyList({
+                    Property("size", kPropertyTypeInteger, 16, 24)
+                }),
+                [display](const PropertyList &properties) -> ReturnValue {
+                    int size = properties["size"].value<int>();
+                    display->SetFontSize(size);
                     return true;
                 });
     }

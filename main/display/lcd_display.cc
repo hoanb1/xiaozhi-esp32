@@ -415,6 +415,48 @@ void LcdDisplay::SetupUI() {
 #else
 #define  MAX_MESSAGES 20
 #endif
+
+void LcdDisplay::SetFontSize(int size) {
+    DisplayLockGuard lock(this);
+    const lv_font_t* new_font = nullptr;
+
+    if (size <= 16) new_font = fonts_.font_16;
+    else if (size >= 24) new_font = fonts_.font_24;
+    else new_font = fonts_.font_20;
+
+    if (new_font == nullptr) new_font = fonts_.text_font;
+    if (new_font == nullptr) return;
+
+    fonts_.text_font = new_font;
+
+    this->current_font_size_ = size;
+
+    lv_obj_set_style_text_font(lv_screen_active(), new_font, 0);
+
+    if (content_ != nullptr) {
+        uint32_t container_count = lv_obj_get_child_cnt(content_);
+        for (uint32_t i = 0; i < container_count; i++) {
+            lv_obj_t* container = lv_obj_get_child(content_, i);
+            if (container == nullptr) continue;
+
+            uint32_t bubble_count = lv_obj_get_child_cnt(container);
+            for (uint32_t j = 0; j < bubble_count; j++) {
+                lv_obj_t* bubble = lv_obj_get_child(container, j);
+                if (bubble == nullptr) continue;
+
+                uint32_t item_count = lv_obj_get_child_cnt(bubble);
+                for (uint32_t k = 0; k < item_count; k++) {
+                    lv_obj_t* item = lv_obj_get_child(bubble, k);
+                    if (item != nullptr && lv_obj_check_type(item, &lv_label_class)) {
+                        lv_obj_set_style_text_font(item, new_font, 0);
+                    }
+                }
+            }
+        }
+    }
+    ESP_LOGI(TAG, "Font size changed to %dpx using board-provided fonts", size);
+}
+
 void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
     if (content_ == nullptr) {

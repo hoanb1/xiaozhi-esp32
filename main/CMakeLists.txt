@@ -23,7 +23,9 @@ set(SOURCES "audio_codecs/audio_codec.cc"
             "settings.cc"
             "background_task.cc"
             "main.cc"
+            "font_viet_16.c"
             "font_viet_20.c"
+            "font_viet_24.c"
             )
 
 set(INCLUDE_DIRS "." "display" "audio_codecs" "protocols" "audio_processing")

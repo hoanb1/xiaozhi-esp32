@@ -1,3 +1,5 @@
+// File: main/display/display.h
+
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
@@ -12,6 +14,9 @@ struct DisplayFonts {
     const lv_font_t* text_font = nullptr;
     const lv_font_t* icon_font = nullptr;
     const lv_font_t* emoji_font = nullptr;
+    const lv_font_t* font_16 = nullptr;
+    const lv_font_t* font_20 = nullptr;
+    const lv_font_t* font_24 = nullptr;
 };
 
 class Display {
@@ -30,6 +35,10 @@ public:
     virtual void SetTheme(const std::string& theme_name);
     virtual std::string GetTheme() { return current_theme_name_; }
     virtual void UpdateStatusBar(bool update_all = false);
+
+    virtual void SetFontSize(int size) {}
+
+    virtual int GetFontSize() { return 20; }
 
 
     inline int width() const { return width_; }

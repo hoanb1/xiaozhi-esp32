@@ -1,3 +1,5 @@
+// File: main/display/lcd_display.h
+
 #ifndef LCD_DISPLAY_H
 #define LCD_DISPLAY_H
 
@@ -22,7 +24,6 @@ struct ThemeColors {
     lv_color_t low_battery;
 };
 
-
 class LcdDisplay : public Display {
 protected:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
@@ -37,7 +38,8 @@ protected:
 
     DisplayFonts fonts_;
     ThemeColors current_theme_;
-    bool stt_mode_active_ = false;  // Tracks if STT (Speech-to-Text) mode is active
+    bool stt_mode_active_ = false;
+    int current_font_size_ = 20;
 
     void SetupUI();
     virtual bool Lock(int timeout_ms = 0) override;
@@ -64,6 +66,9 @@ public:
     
     // Set STT (Speech-to-Text) mode
     void SetSttMode(bool enable) override;
+    virtual void SetFontSize(int size) override;
+    virtual int GetFontSize() override { return current_font_size_; }
+
 };
 
 // RGB LCD显示器

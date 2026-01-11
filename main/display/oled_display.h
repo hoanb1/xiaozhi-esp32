@@ -19,6 +19,8 @@ private:
     lv_obj_t* side_bar_ = nullptr;
 
     DisplayFonts fonts_;
+    int current_font_size_ = 20;
+
 
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;

@@ -229,6 +229,8 @@ std::string WifiBoard::GetDeviceStatusJson() {
     auto display = board.GetDisplay();
     if (display && display->height() > 64) { // For LCD display only
         cJSON_AddStringToObject(screen, "theme", display->GetTheme().c_str());
+
+        cJSON_AddNumberToObject(screen, "font_size", display->GetFontSize());
     }
     cJSON_AddItemToObject(root, "screen", screen);
 
