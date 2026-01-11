@@ -21,6 +21,9 @@ Es8311AudioCodec::Es8311AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port,
     pa_pin_ = pa_pin;
     pa_inverted_ = pa_inverted;
 
+    tx_enabled_ = false;
+    rx_enabled_ = false;
+
     assert(input_sample_rate_ == output_sample_rate_);
     CreateDuplexChannels(mclk, bclk, ws, dout, din);
 
@@ -70,12 +73,17 @@ Es8311AudioCodec::~Es8311AudioCodec() {
 }
 
 void Es8311AudioCodec::UpdateDeviceState() {
-    // KHÔNG TỰ ĐỘNG DISABLE I2S TRONG QUÁ TRÌNH CHẠY ĐỂ TRÁNH LỖI TRẠNG THÁI
-    if (dev_ == nullptr && (input_enabled_ || output_enabled_)) {
-        ESP_LOGI(TAG, "Enabling I2S and opening codec device at %d Hz", output_sample_rate_);
+    bool should_enable = input_enabled_ || output_enabled_;
 
-        i2s_channel_enable(tx_handle_);
-        i2s_channel_enable(rx_handle_);
+    if (should_enable && dev_ == nullptr) {
+        if (!tx_enabled_) {
+            i2s_channel_enable(tx_handle_);
+            tx_enabled_ = true;
+        }
+        if (!rx_enabled_) {
+            i2s_channel_enable(rx_handle_);
+            rx_enabled_ = true;
+        }
 
         esp_codec_dev_cfg_t dev_cfg = {
             .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
@@ -106,13 +114,16 @@ void Es8311AudioCodec::UpdateDeviceState() {
 void Es8311AudioCodec::SetOutputSampleRate(int sample_rate) {
     if (output_sample_rate_ == sample_rate) return;
 
-    ESP_LOGI(TAG, "Switching Hardware Sample Rate: %d -> %d Hz", output_sample_rate_, sample_rate);
+    ESP_LOGI(TAG, "SetOutputSampleRate: %d -> %d Hz", output_sample_rate_, sample_rate);
+
     output_sample_rate_ = sample_rate;
     input_sample_rate_ = sample_rate;
 
     if (dev_ != nullptr) {
-        // Chỉ đóng codec device, KHÔNG disable I2S để tránh log lỗi "not enabled"
         esp_codec_dev_close(dev_);
+
+        tx_enabled_ = false;
+        rx_enabled_ = false;
 
         i2s_std_clk_config_t clk_cfg = {
             .sample_rate_hz = (uint32_t)output_sample_rate_,
@@ -120,9 +131,18 @@ void Es8311AudioCodec::SetOutputSampleRate(int sample_rate) {
             .mclk_multiple = I2S_MCLK_MULTIPLE_256,
         };
 
-        // Sử dụng reconfig để thay đổi clock mượt mà
         i2s_channel_reconfig_std_clock(tx_handle_, &clk_cfg);
         i2s_channel_reconfig_std_clock(rx_handle_, &clk_cfg);
+
+        // Bật lại I2S trước khi open codec dev
+        if (!tx_enabled_) {
+            i2s_channel_enable(tx_handle_);
+            tx_enabled_ = true;
+        }
+        if (!rx_enabled_) {
+            i2s_channel_enable(rx_handle_);
+            rx_enabled_ = true;
+        }
 
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
@@ -131,8 +151,8 @@ void Es8311AudioCodec::SetOutputSampleRate(int sample_rate) {
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
         };
-        ESP_ERROR_CHECK(esp_codec_dev_open(dev_, &fs));
 
+        ESP_ERROR_CHECK(esp_codec_dev_open(dev_, &fs));
         esp_codec_dev_set_in_gain(dev_, (float)mic_gain_);
         esp_codec_dev_set_out_vol(dev_, output_volume_);
     }

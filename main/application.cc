@@ -1237,20 +1237,21 @@ void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
         return;
     }
 
-    ESP_LOGI(TAG, "[Audio] Switching hardware Sample Rate to: %d Hz", sample_rate);
+    ESP_LOGI(TAG, "[Audio] Reconfiguring for: %d Hz, %d ms", sample_rate, frame_duration);
 
     std::lock_guard<std::mutex> lock(mutex_);
     opus_decoder_.reset();
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(sample_rate, 1, frame_duration);
 
     auto codec = Board::GetInstance().GetAudioCodec();
-    // Đồng bộ phần cứng codec với Sample Rate mới từ Server
-    codec->SetOutputSampleRate(sample_rate);
 
-    if (codec->input_sample_rate() != AUDIO_MODEL_SAMPLE_RATE) {
-        ESP_LOGI(TAG, "[Audio] Reconfiguring Input Resamplers: %d -> %d", codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
-        input_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
-        reference_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+    if (codec->output_sample_rate() != sample_rate) {
+        codec->SetOutputSampleRate(sample_rate);
+
+        if (codec->input_sample_rate() != AUDIO_MODEL_SAMPLE_RATE) {
+            input_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+            reference_resampler_.Configure(codec->input_sample_rate(), AUDIO_MODEL_SAMPLE_RATE);
+        }
     }
 
     if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {

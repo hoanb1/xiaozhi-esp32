@@ -11,6 +11,8 @@
 
 class Es8311AudioCodec : public AudioCodec {
 private:
+    bool pending_sr_change_ = false;
+
     const audio_codec_data_if_t* data_if_ = nullptr;
     const audio_codec_ctrl_if_t* ctrl_if_ = nullptr;
     const audio_codec_if_t* codec_if_ = nullptr;
