@@ -173,8 +173,9 @@ void Application::CheckNewVersion(Ota &ota) {
             wake_word_->StopDetection();
             // Pre-close audio output to avoid audio operations during upgrade
             auto codec = board.GetAudioCodec();
-            codec->EnableInput(false);
-            codec->EnableOutput(false);
+            if (codec->input_enabled()) codec->EnableInput(false);
+            if (codec->output_enabled()) codec->EnableOutput(false);
+
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 audio_decode_queue_.clear();
@@ -946,7 +947,7 @@ void Application::OnAudioOutput() {
         if (device_state_ == kDeviceStateIdle) {
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_output_time_).count();
             if (duration > max_silence_seconds) {
-                codec->EnableOutput(false);
+                if (codec->output_enabled()) codec->EnableOutput(false);
             }
         }
         return;
@@ -1122,9 +1123,8 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetEmotion("neutral");
             audio_processor_->Stop();
 
-            // Half-duplex: Idle - Bật Mic (chờ wake word), Tắt Loa
-            codec->EnableInput(true);
-            codec->EnableOutput(false);
+            if (codec->output_enabled()) codec->EnableOutput(false);
+            if (!codec->input_enabled()) codec->EnableInput(true);
 
             wake_word_->StartDetection();
             break;
@@ -1138,9 +1138,8 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
 
-            // Half-duplex: Listening - Tắt Loa, Bật Mic
-            codec->EnableOutput(false);
-            codec->EnableInput(true);
+            if (codec->output_enabled()) codec->EnableOutput(false);
+            if (!codec->input_enabled()) codec->EnableInput(true);
 
             if (!audio_processor_->IsRunning()) {
                 protocol_->SendStartListening(listening_mode_);
@@ -1154,9 +1153,8 @@ void Application::SetDeviceState(DeviceState state) {
             if (stt_only_mode_) {
                 device_state_ = kDeviceStateListening;
 
-                // Half-duplex (STT Mode): Tắt Loa, Bật Mic
-                codec->EnableOutput(false);
-                codec->EnableInput(true);
+                if (codec->output_enabled()) codec->EnableOutput(false);
+                if (!codec->input_enabled()) codec->EnableInput(true);
 
                 if (!audio_processor_->IsRunning()) {
                     protocol_->SendStartListening(listening_mode_);
@@ -1169,9 +1167,8 @@ void Application::SetDeviceState(DeviceState state) {
             }
             display->SetStatus(Lang::Strings::SPEAKING);
 
-            // Half-duplex: Speaking - Tắt Mic, Bật Loa
-            codec->EnableInput(false);
-            codec->EnableOutput(true);
+            if (codec->input_enabled()) codec->EnableInput(false);
+            if (!codec->output_enabled()) codec->EnableOutput(true);
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_processor_->Stop();
@@ -1182,8 +1179,8 @@ void Application::SetDeviceState(DeviceState state) {
 
         case kDeviceStateAudioTesting:
             display->SetStatus("Testing mode");
-            codec->EnableInput(true);
-            codec->EnableOutput(false);
+            if (!codec->input_enabled()) codec->EnableInput(true);
+            if (codec->output_enabled()) codec->EnableOutput(false);
 
             wake_word_->StopDetection();
             audio_processor_->Stop();
@@ -1191,8 +1188,8 @@ void Application::SetDeviceState(DeviceState state) {
 
         case kDeviceStateUpgrading:
             display->SetStatus(Lang::Strings::UPGRADING);
-            codec->EnableInput(false);
-            codec->EnableOutput(false);
+            if (codec->input_enabled()) codec->EnableInput(false);
+            if (codec->output_enabled()) codec->EnableOutput(false);
             break;
 
         case kDeviceStateActivating:
@@ -1202,8 +1199,8 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateFatalError:
             display->SetStatus(Lang::Strings::ERROR);
             display->SetEmotion("sad");
-            codec->EnableInput(false);
-            codec->EnableOutput(false);
+            if (codec->input_enabled()) codec->EnableInput(false);
+            if (codec->output_enabled()) codec->EnableOutput(false);
             break;
 
         default:
