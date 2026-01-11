@@ -342,15 +342,8 @@ void LcdDisplay::SetupUI() {
 
 
     // Enable scrolling for chat content
-    lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scroll_dir(content_, LV_DIR_VER);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_EVENT_BUBBLE);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLL_ELASTIC); // Bouncy scroll effect
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLL_MOMENTUM); // Momentum scroll effect
-
-    ESP_LOGI(TAG, "Chat content area initialized with SCROLLABLE flags");
 
     // Create a flex container for chat messages
     lv_obj_set_flex_flow(content_, LV_FLEX_FLOW_COLUMN);
@@ -463,28 +456,21 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_obj_t* msg_bubble = lv_obj_create(content_);
     lv_obj_set_style_radius(msg_bubble, 8, 0);
     lv_obj_set_scrollbar_mode(msg_bubble, LV_SCROLLBAR_MODE_OFF);
-
-    // FIX: Đảm bảo sự kiện click truyền qua bong bóng lên content_ và screen
-    lv_obj_add_flag(msg_bubble, LV_OBJ_FLAG_EVENT_BUBBLE);
-    lv_obj_clear_flag(msg_bubble, LV_OBJ_FLAG_CLICKABLE); // Cho phép click xuyên qua
-
-    if (stt_mode_active_) {
-        lv_obj_set_style_border_width(msg_bubble, 0, 0);
-    } else {
     lv_obj_set_style_border_width(msg_bubble, 1, 0);
     lv_obj_set_style_border_color(msg_bubble, current_theme_.border, 0);
-    }
-
     lv_obj_set_style_pad_all(msg_bubble, 8, 0);
+
+    lv_obj_add_flag(msg_bubble, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_clear_flag(msg_bubble, LV_OBJ_FLAG_CLICKABLE); // Cho phép click xuyên qua
 
     // Create the message text
     lv_obj_t* msg_text = lv_label_create(msg_bubble);
     lv_label_set_text(msg_text, content);
-    
-    // Đảm bảo label cũng không chặn click
+
     lv_obj_add_flag(msg_text, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_clear_flag(msg_text, LV_OBJ_FLAG_CLICKABLE);
 
+    // 计算文本实际宽度
     lv_coord_t text_width = lv_txt_get_width(content, strlen(content), fonts_.text_font, 0);
 
     // Calculate bubble width
@@ -572,11 +558,12 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(container, 0, 0);
         lv_obj_set_style_pad_all(container, 0, 0);
-        
-        // FIX: Container cũng phải cho click xuyên qua
+
+
         lv_obj_add_flag(container, LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_clear_flag(container, LV_OBJ_FLAG_CLICKABLE);
 
+        // Move the message bubble into this container
         lv_obj_set_parent(msg_bubble, container);
         
         // Right align the bubble in the container
@@ -594,11 +581,11 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(container, 0, 0);
         lv_obj_set_style_pad_all(container, 0, 0);
-        
-        // FIX: Container cũng phải cho click xuyên qua
+
         lv_obj_add_flag(container, LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_clear_flag(container, LV_OBJ_FLAG_CLICKABLE);
 
+        // 将消息气泡移入此容器
         lv_obj_set_parent(msg_bubble, container);
         
         // Center align the bubble in the container
@@ -630,15 +617,8 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
         lv_obj_t* img_bubble = lv_obj_create(content_);
         lv_obj_set_style_radius(img_bubble, 8, 0);
         lv_obj_set_scrollbar_mode(img_bubble, LV_SCROLLBAR_MODE_OFF);
-
-        // CHANGE: No border if STT Only mode is active
-        if (stt_mode_active_) {
-            lv_obj_set_style_border_width(img_bubble, 0, 0);
-        } else {
         lv_obj_set_style_border_width(img_bubble, 1, 0);
         lv_obj_set_style_border_color(img_bubble, current_theme_.border, 0);
-        }
-
         lv_obj_set_style_pad_all(img_bubble, 8, 0);
         
         // Set image bubble background color (similar to system message)
@@ -755,15 +735,6 @@ void LcdDisplay::SetupUI() {
     
     /* Content */
     content_ = lv_obj_create(container_);
-    // Enable scrolling for chat content
-    lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_set_scroll_dir(content_, LV_DIR_VER);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_EVENT_BUBBLE);
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLL_ELASTIC); // Bouncy scroll effect
-    lv_obj_add_flag(content_, LV_OBJ_FLAG_SCROLL_MOMENTUM); // Momentum scroll effect
-
     lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_radius(content_, 0, 0);
     lv_obj_set_width(content_, LV_HOR_RES);

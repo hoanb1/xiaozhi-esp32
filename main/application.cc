@@ -38,10 +38,10 @@
 
 #define TAG "Application"
 
-// --- CẤU HÌNH THỜI GIAN TIẾT KIỆM PIN (Giây) ---
-#define BATTERY_SAVE_DIM_TIMEOUT   60   // 1 phút: Giảm độ sáng
-#define BATTERY_SAVE_OFF_TIMEOUT   120  // 2 phút: Tắt hẳn màn hình
-#define BATTERY_SAVE_SLEEP_TIMEOUT 600  // 10 phút: Ngủ sâu (Deep Sleep)
+// --- BATTERY SAVER CONFIGURATION (Seconds) ---
+#define BATTERY_SAVE_DIM_TIMEOUT   60   // 1 minute: Dim brightness
+#define BATTERY_SAVE_OFF_TIMEOUT   120  // 2 minutes: Turn off display
+#define BATTERY_SAVE_SLEEP_TIMEOUT 600  // 10 minutes: Deep Sleep
 
 static const char *const STATE_STRINGS[] = {
     "unknown",
@@ -59,6 +59,7 @@ static const char *const STATE_STRINGS[] = {
 };
 
 Application::Application() {
+    ESP_LOGI(TAG, "Initializing Application instance");
     event_group_ = xEventGroupCreate();
     background_task_ = new BackgroundTask(4096 * 7);
 
@@ -66,24 +67,32 @@ Application::Application() {
 
 #if CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
+    ESP_LOGI(TAG, "AEC Mode: Device Side");
 #elif CONFIG_USE_SERVER_AEC
     aec_mode_ = kAecOnServerSide;
+    ESP_LOGI(TAG, "AEC Mode: Server Side");
 #else
     aec_mode_ = kAecOff;
+    ESP_LOGI(TAG, "AEC Mode: Off");
 #endif
 
 #if CONFIG_USE_AUDIO_PROCESSOR
     audio_processor_ = std::make_unique<AfeAudioProcessor>();
+    ESP_LOGI(TAG, "Audio Processor: AFE");
 #else
     audio_processor_ = std::make_unique<NoAudioProcessor>();
+    ESP_LOGW(TAG, "Audio Processor: None");
 #endif
 
 #if CONFIG_USE_AFE_WAKE_WORD
     wake_word_ = std::make_unique<AfeWakeWord>();
+    ESP_LOGI(TAG, "Wake-word Engine: AFE");
 #elif CONFIG_USE_ESP_WAKE_WORD
     wake_word_ = std::make_unique<EspWakeWord>();
+    ESP_LOGI(TAG, "Wake-word Engine: ESP");
 #else
     wake_word_ = std::make_unique<NoWakeWord>();
+    ESP_LOGW(TAG, "Wake-word Engine: None");
 #endif
 
     esp_timer_create_args_t clock_timer_args = {
@@ -100,6 +109,7 @@ Application::Application() {
 }
 
 Application::~Application() {
+    ESP_LOGW(TAG, "Destroying Application instance");
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
@@ -111,6 +121,7 @@ Application::~Application() {
 }
 
 void Application::CheckNewVersion(Ota &ota) {
+    ESP_LOGI(TAG, "[OTA] Checking for new firmware version");
     const int MAX_RETRY = 10;
     int retry_count = 0;
     int retry_delay = 10;
@@ -123,7 +134,7 @@ void Application::CheckNewVersion(Ota &ota) {
         if (!ota.CheckVersion()) {
             retry_count++;
             if (retry_count >= MAX_RETRY) {
-                ESP_LOGE(TAG, "Too many retries, exit version check");
+                ESP_LOGE(TAG, "[OTA] Too many retries, exit version check");
                 return;
             }
 
@@ -132,7 +143,7 @@ void Application::CheckNewVersion(Ota &ota) {
                      ota.GetCheckVersionUrl().c_str());
             Alert(Lang::Strings::ERROR, buffer, "sad", Lang::Sounds::P3_EXCLAMATION);
 
-            ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
+            ESP_LOGW(TAG, "[OTA] Check failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
             for (int i = 0; i < retry_delay; i++) {
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 if (device_state_ == kDeviceStateIdle) {
@@ -146,6 +157,7 @@ void Application::CheckNewVersion(Ota &ota) {
         retry_delay = 10;
 
         if (ota.HasNewVersion()) {
+            ESP_LOGI(TAG, "[OTA] New version found: %s. Starting upgrade process...", ota.GetFirmwareVersion().c_str());
             Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
 
             vTaskDelay(pdMS_TO_TICKS(3000));
@@ -173,6 +185,7 @@ void Application::CheckNewVersion(Ota &ota) {
             vTaskDelay(pdMS_TO_TICKS(1000));
 
             ota.StartUpgrade([display](int progress, size_t speed) {
+                ESP_LOGD(TAG, "[OTA] Progress: %d%% (%u KB/s)", progress, (unsigned int)(speed / 1024));
                 char buffer[64];
                 snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
                 display->SetChatMessage("system", buffer);
@@ -180,34 +193,34 @@ void Application::CheckNewVersion(Ota &ota) {
 
             // If upgrade success, the device will reboot and never reach here
             display->SetStatus(Lang::Strings::UPGRADE_FAILED);
-            ESP_LOGI(TAG, "Firmware upgrade failed...");
+            ESP_LOGE(TAG, "[OTA] Firmware upgrade failed...");
             vTaskDelay(pdMS_TO_TICKS(3000));
             Reboot();
             return;
         }
 
-        // No new version, mark the current version as valid
         ota.MarkCurrentVersionValid();
         if (!ota.HasActivationCode() && !ota.HasActivationChallenge()) {
+            ESP_LOGI(TAG, "[OTA] No new version and activation not required");
             xEventGroupSetBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT);
-            // Exit the loop if done checking new version
             break;
         }
 
         display->SetStatus(Lang::Strings::ACTIVATION);
-        // Activation code is shown to the user and waiting for the user to input
         if (ota.HasActivationCode()) {
+            ESP_LOGI(TAG, "[OTA] Activation required. Code: %s", ota.GetActivationCode().c_str());
             ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
         }
 
-        // This will block the loop until the activation is done or timeout
         for (int i = 0; i < 10; ++i) {
-            ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
+            ESP_LOGI(TAG, "[OTA] Attempting activation... %d/%d", i + 1, 10);
             esp_err_t err = ota.Activate();
             if (err == ESP_OK) {
+                ESP_LOGI(TAG, "[OTA] Activation successful");
                 xEventGroupSetBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT);
                 break;
             } else if (err == ESP_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "[OTA] Activation timeout, retrying...");
                 vTaskDelay(pdMS_TO_TICKS(3000));
             } else {
                 vTaskDelay(pdMS_TO_TICKS(10000));
@@ -239,7 +252,6 @@ void Application::ShowActivationCode(const std::string &code, const std::string 
         }
     };
 
-    // This sentence uses 9KB of SRAM, so we need to wait for it to finish
     Alert(Lang::Strings::ACTIVATION, message.c_str(), "happy", Lang::Sounds::P3_ACTIVATION);
 
     for (const auto &digit: code) {
@@ -252,7 +264,7 @@ void Application::ShowActivationCode(const std::string &code, const std::string 
 }
 
 void Application::Alert(const char *status, const char *message, const char *emotion, const std::string_view &sound) {
-    ESP_LOGW(TAG, "Alert %s: %s [%s]", status, message, emotion);
+    ESP_LOGW(TAG, "ALERT: Status=%s, Msg=%s, Emotion=%s", status, message, emotion);
     auto display = Board::GetInstance().GetDisplay();
     display->SetStatus(status);
     display->SetEmotion(emotion);
@@ -265,6 +277,7 @@ void Application::Alert(const char *status, const char *message, const char *emo
 
 void Application::DismissAlert() {
     if (device_state_ == kDeviceStateIdle) {
+        ESP_LOGD(TAG, "Dismissing alert");
         auto display = Board::GetInstance().GetDisplay();
         display->SetStatus(Lang::Strings::STANDBY);
         display->SetEmotion("neutral");
@@ -273,7 +286,7 @@ void Application::DismissAlert() {
 }
 
 void Application::PlaySound(const std::string_view &sound) {
-    // Wait for the previous sound to finish
+    ESP_LOGD(TAG, "Playing internal sound");
     {
         std::unique_lock<std::mutex> lock(mutex_);
         audio_decode_cv_.wait(lock, [this]() {
@@ -310,13 +323,13 @@ void Application::EnterAudioTestingMode() {
 void Application::ExitAudioTestingMode() {
     ESP_LOGI(TAG, "Exiting audio testing mode");
     SetDeviceState(kDeviceStateWifiConfiguring);
-    // Copy audio_testing_queue_ to audio_decode_queue_
     std::lock_guard<std::mutex> lock(mutex_);
     audio_decode_queue_ = std::move(audio_testing_queue_);
     audio_decode_cv_.notify_all();
 }
 
 void Application::ToggleChatState() {
+    ESP_LOGI(TAG, "ToggleChatState triggered (Current State: %s)", STATE_STRINGS[device_state_]);
     if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
@@ -333,13 +346,11 @@ void Application::ToggleChatState() {
         return;
     }
 
-    // -------------------------------------------------------------
-    // LOGIC CHO STT ONLY MODE
-    // -------------------------------------------------------------
+    // --- STT ONLY MODE LOGIC ---
     if (stt_only_mode_) {
         if (device_state_ == kDeviceStateListening || device_state_ == kDeviceStateSpeaking || device_state_ ==
             kDeviceStateConnecting) {
-            ESP_LOGI(TAG, "STT Mode: User toggled to PAUSE (Idle)");
+            ESP_LOGI(TAG, "[STT Mode] User toggled to PAUSE (Idle)");
             listening_mode_ = kListeningModeManualStop;
             Schedule([this]() {
                 if (protocol_->IsAudioChannelOpened()) {
@@ -350,7 +361,7 @@ void Application::ToggleChatState() {
             });
         }
         else {
-            ESP_LOGI(TAG, "STT Mode: User toggled to RESUME (Listening)");
+            ESP_LOGI(TAG, "[STT Mode] User toggled to RESUME (Listening)");
             listening_mode_ = kListeningModeRealtime;
             Schedule([this]() {
                 if (!protocol_->IsAudioChannelOpened()) {
@@ -367,10 +378,9 @@ void Application::ToggleChatState() {
         return;
     }
 
-    // -------------------------------------------------------------
-    // LOGIC CHO CHẾ ĐỘ THƯỜNG (NORMAL MODE)
-    // -------------------------------------------------------------
+    // --- NORMAL MODE LOGIC ---
     if (device_state_ == kDeviceStateIdle) {
+        ESP_LOGI(TAG, "[Normal Mode] Starting session");
         Schedule([this]() {
             if (!protocol_->IsAudioChannelOpened()) {
                 SetDeviceState(kDeviceStateConnecting);
@@ -382,10 +392,12 @@ void Application::ToggleChatState() {
             SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
+        ESP_LOGI(TAG, "[Normal Mode] Aborting speech");
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);
         });
     } else if (device_state_ == kDeviceStateListening) {
+        ESP_LOGI(TAG, "[Normal Mode] Manual stop listening");
         Schedule([this]() {
             protocol_->CloseAudioChannel();
         });
@@ -393,6 +405,7 @@ void Application::ToggleChatState() {
 }
 
 void Application::StartListening() {
+    ESP_LOGI(TAG, "StartListening requested");
     if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
@@ -426,6 +439,7 @@ void Application::StartListening() {
 }
 
 void Application::StopListening() {
+    ESP_LOGI(TAG, "StopListening requested");
     if (device_state_ == kDeviceStateAudioTesting) {
         ExitAudioTestingMode();
         return;
@@ -436,8 +450,9 @@ void Application::StopListening() {
         kDeviceStateSpeaking,
         kDeviceStateIdle,
     };
-    // If not valid, do nothing
+
     if (std::find(valid_states.begin(), valid_states.end(), device_state_) == valid_states.end()) {
+        ESP_LOGW(TAG, "StopListening ignored in state: %s", STATE_STRINGS[device_state_]);
         return;
     }
 
@@ -449,50 +464,42 @@ void Application::StopListening() {
     });
 }
 
-// -------------------------------------------------------------------------
-// SEPARATE MESSAGE HANDLERS
-// -------------------------------------------------------------------------
+// --- MESSAGE HANDLERS ---
 
 void Application::HandleSttMode(const cJSON *root) {
     auto display = Board::GetInstance().GetDisplay();
     auto type = cJSON_GetObjectItem(root, "type");
 
-    // 1. Handle STT
     if (strcmp(type->valuestring, "stt") == 0) {
         auto text = cJSON_GetObjectItem(root, "text");
         if (cJSON_IsString(text)) {
-            ESP_LOGI(TAG, "STT Mode >> %s", text->valuestring);
+            ESP_LOGI(TAG, "[STT-Only] Recognition Result: %s", text->valuestring);
             Schedule([this, display, message = std::string(text->valuestring)]() {
                 display->SetChatMessage("user", message.c_str());
             });
         }
     }
-    // 2. Handle TTS
     else if (strcmp(type->valuestring, "tts") == 0) {
         auto state = cJSON_GetObjectItem(root, "state");
-        if (state && strcmp(state->valuestring, "stop") == 0) {
-             // Logic dừng nếu cần
+        ESP_LOGD(TAG, "[STT-Only] TTS state received: %s", state->valuestring);
         }
-    }
-    // 3. Handle System Commands
     else if (strcmp(type->valuestring, "system") == 0) {
         auto command = cJSON_GetObjectItem(root, "command");
+        ESP_LOGI(TAG, "[STT-Only] System command: %s", command->valuestring);
         if (cJSON_IsString(command) && strcmp(command->valuestring, "reboot") == 0) {
             Schedule([this]() { Reboot(); });
         }
     }
 
-    // --- BỔ SUNG QUAN TRỌNG: XỬ LÝ MCP TRONG CHẾ ĐỘ STT ---
 #if CONFIG_IOT_PROTOCOL_MCP
     else if (strcmp(type->valuestring, "mcp") == 0) {
         auto payload = cJSON_GetObjectItem(root, "payload");
         if (cJSON_IsObject(payload)) {
-            ESP_LOGI(TAG, "STT Mode received MCP Command");
+            ESP_LOGI(TAG, "[STT-Only] Processing MCP Command");
             McpServer::GetInstance().ParseMessage(payload);
         }
     }
 #endif
-    // -----------------------------------------------------
 }
 
 void Application::HandleNormalMode(const cJSON *root) {
@@ -501,6 +508,7 @@ void Application::HandleNormalMode(const cJSON *root) {
 
     if (strcmp(type->valuestring, "tts") == 0) {
         auto state = cJSON_GetObjectItem(root, "state");
+        ESP_LOGD(TAG, "[Normal] TTS State: %s", state->valuestring);
         if (strcmp(state->valuestring, "start") == 0) {
             Schedule([this]() {
                 aborted_ = false;
@@ -522,7 +530,7 @@ void Application::HandleNormalMode(const cJSON *root) {
         } else if (strcmp(state->valuestring, "sentence_start") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
-                ESP_LOGI(TAG, "<< %s", text->valuestring);
+                ESP_LOGI(TAG, "[Assistant] Sentence: %s", text->valuestring);
                 Schedule([this, display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("assistant", message.c_str());
                 });
@@ -531,7 +539,7 @@ void Application::HandleNormalMode(const cJSON *root) {
     } else if (strcmp(type->valuestring, "stt") == 0) {
         auto text = cJSON_GetObjectItem(root, "text");
         if (cJSON_IsString(text)) {
-            ESP_LOGI(TAG, ">> %s", text->valuestring);
+            ESP_LOGI(TAG, "[User] Recognition: %s", text->valuestring);
             Schedule([this, display, message = std::string(text->valuestring)]() {
                 display->SetChatMessage("user", message.c_str());
             });
@@ -539,6 +547,7 @@ void Application::HandleNormalMode(const cJSON *root) {
     } else if (strcmp(type->valuestring, "llm") == 0) {
         auto emotion = cJSON_GetObjectItem(root, "emotion");
         if (cJSON_IsString(emotion)) {
+            ESP_LOGD(TAG, "[LLM] Emotion change: %s", emotion->valuestring);
             Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
                 display->SetEmotion(emotion_str.c_str());
             });
@@ -547,6 +556,7 @@ void Application::HandleNormalMode(const cJSON *root) {
     } else if (strcmp(type->valuestring, "mcp") == 0) {
         auto payload = cJSON_GetObjectItem(root, "payload");
         if (cJSON_IsObject(payload)) {
+            ESP_LOGI(TAG, "[Normal] Processing MCP Message");
             McpServer::GetInstance().ParseMessage(payload);
         }
 #endif
@@ -554,6 +564,7 @@ void Application::HandleNormalMode(const cJSON *root) {
     } else if (strcmp(type->valuestring, "iot") == 0) {
             auto commands = cJSON_GetObjectItem(root, "commands");
             if (cJSON_IsArray(commands)) {
+                ESP_LOGI(TAG, "[IOT] Processing %d commands", cJSON_GetArraySize(commands));
                 auto &thing_manager = iot::ThingManager::GetInstance();
                 for (int i = 0; i < cJSON_GetArraySize(commands); ++i) {
                     auto command = cJSON_GetArrayItem(commands, i);
@@ -564,6 +575,7 @@ void Application::HandleNormalMode(const cJSON *root) {
     } else if (strcmp(type->valuestring, "system") == 0) {
         auto command = cJSON_GetObjectItem(root, "command");
         if (cJSON_IsString(command)) {
+            ESP_LOGW(TAG, "[System] Command received: %s", command->valuestring);
             if (strcmp(command->valuestring, "reboot") == 0) {
                 Schedule([this]() { Reboot(); });
             }
@@ -577,34 +589,36 @@ void Application::HandleNormalMode(const cJSON *root) {
         }
     } else if (strcmp(type->valuestring, "battery_save") == 0) {
         bool enable = cJSON_IsTrue(cJSON_GetObjectItem(root, "enable"));
+        ESP_LOGI(TAG, "[System] Remote battery save set to: %s", enable ? "On" : "Off");
         SetBatterySaverMode(enable);
     }
 }
 
 
 void Application::Start() {
+    ESP_LOGI(TAG, "Application service starting...");
     auto &board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
 
-    /* Setup the display */
     auto display = board.GetDisplay();
-
-    /* Setup the audio codec */
     auto codec = board.GetAudioCodec();
+
+    ESP_LOGI(TAG, "[Audio] Initializing Opus Codecs...");
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
     opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
+
     if (aec_mode_ != kAecOff) {
-        ESP_LOGI(TAG, "AEC mode: %d, setting opus encoder complexity to 0", aec_mode_);
+        ESP_LOGI(TAG, "[Audio] AEC mode: %d, encoder complexity set to 0", aec_mode_);
         opus_encoder_->SetComplexity(0);
     } else if (board.GetBoardType() == "ml307") {
-        ESP_LOGI(TAG, "ML307 board detected, setting opus encoder complexity to 5");
+        ESP_LOGI(TAG, "[Audio] ML307 board, encoder complexity set to 5");
         opus_encoder_->SetComplexity(5);
     } else {
-        ESP_LOGI(TAG, "WiFi board detected, setting opus encoder complexity to 0");
         opus_encoder_->SetComplexity(0);
     }
 
     if (codec->input_sample_rate() != 16000) {
+        ESP_LOGI(TAG, "[Audio] Resampler init: %d to 16000", codec->input_sample_rate());
         input_resampler_.Configure(codec->input_sample_rate(), 16000);
         reference_resampler_.Configure(codec->input_sample_rate(), 16000);
     }
@@ -624,45 +638,41 @@ void Application::Start() {
     }, "audio_loop", 4096 * 2, this, 8, &audio_loop_task_handle_);
 #endif
 
-    /* Start the clock timer to update the status bar */
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
 
-    /* Wait for the network to be ready */
     display->SetStatus(Lang::Strings::CONNECTING);
+    ESP_LOGI(TAG, "[Network] Starting network connection");
     board.StartNetwork();
 
-    // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
 
-    // Check for new firmware version or get the MQTT broker address
     Ota ota;
-    // CheckNewVersion(ota); // Disabled for faster boot
-
-    // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
-    // Add MCP common tools before initializing the protocol
 #if CONFIG_IOT_PROTOCOL_MCP
+    ESP_LOGI(TAG, "[System] Adding MCP server tools");
     McpServer::GetInstance().AddCommonTools();
 #endif
 
     if (ota.HasMqttConfig()) {
+        ESP_LOGI(TAG, "[Protocol] Protocol: MQTT");
         protocol_ = std::make_unique<MqttProtocol>();
     } else if (ota.HasWebsocketConfig()) {
+        ESP_LOGI(TAG, "[Protocol] Protocol: WebSocket");
         protocol_ = std::make_unique<WebsocketProtocol>();
     } else {
-        ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
+        ESP_LOGW(TAG, "[Protocol] No protocol in OTA config, using default MQTT");
         protocol_ = std::make_unique<MqttProtocol>();
     }
 
     protocol_->OnNetworkError([this](const std::string &message) {
+        ESP_LOGE(TAG, "[Network] Protocol network error: %s", message.c_str());
         SetDeviceState(kDeviceStateIdle);
         Alert(Lang::Strings::ERROR, message.c_str(), "sad", Lang::Sounds::P3_EXCLAMATION);
     });
     protocol_->OnIncomingAudio([this](AudioStreamPacket &&packet) {
-        // Only add to queue if not in STT only mode
         if (stt_only_mode_) {
-            ESP_LOGD(TAG, "Incoming Audio ignored in STT Only mode");
+            ESP_LOGV(TAG, "[Audio] Incoming Audio ignored in STT Mode");
             return;
         }
         std::lock_guard<std::mutex> lock(mutex_);
@@ -671,12 +681,12 @@ void Application::Start() {
         }
     });
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
-        // Wakeup screen on new session
+        ESP_LOGI(TAG, "[Protocol] Audio channel opened. Server SR: %d", protocol_->server_sample_rate());
         board.SetPowerSaveMode(false);
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(
                 TAG,
-                "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
+                "[Audio] SR mismatch! Server: %d vs Device: %d. Distortion possible.",
                 protocol_->server_sample_rate(), codec->output_sample_rate());
         }
 
@@ -690,20 +700,13 @@ void Application::Start() {
 #endif
     });
 
-    // -------------------------------------------------------------
-    // FIX: LOGIC KHI KẾT THÚC SESSION (GOODBYE)
-    // -------------------------------------------------------------
-    protocol_->OnAudioChannelClosed([this, &board]() {
-        // NOTE: We do NOT force power save here immediately.
-        // We let the idle timer handle the dimming to avoid screen flickering off too fast.
-        // board.SetPowerSaveMode(true);
-
+    protocol_->OnAudioChannelClosed([this]() {
+        ESP_LOGI(TAG, "[Protocol] Audio channel closed");
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
 
             if (stt_only_mode_) {
-                // Khi Server gửi Goodbye (Session Closed):
-                ESP_LOGI(TAG, "STT Mode: Server sent Goodbye. Stopping.");
+                ESP_LOGI(TAG, "[STT-Only] Server session ended. Stopping listening loop.");
                 SetDeviceState(kDeviceStateIdle);
                 listening_mode_ = kListeningModeManualStop;
             } else {
@@ -713,7 +716,6 @@ void Application::Start() {
         });
     });
 
-    // Main Message Dispatcher
     protocol_->OnIncomingJson([this](const cJSON *root) {
         if (stt_only_mode_) {
             HandleSttMode(root);
@@ -722,6 +724,7 @@ void Application::Start() {
         }
     });
 
+    ESP_LOGI(TAG, "[Protocol] Starting connection engine");
     bool protocol_started = protocol_->Start();
 
     audio_debugger_ = std::make_unique<AudioDebugger>();
@@ -730,7 +733,7 @@ void Application::Start() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (audio_send_queue_.size() >= MAX_AUDIO_PACKETS_IN_QUEUE) {
-                ESP_LOGW(TAG, "Too many audio packets in queue, drop the newest packet");
+                ESP_LOGW(TAG, "[Audio] Send queue full, dropping packet");
                 return;
             }
         }
@@ -749,7 +752,6 @@ void Application::Start() {
                     }
 
                     if (timestamp_queue_.size() > 3) {
-                        // Limit queue size to 3
                         timestamp_queue_.pop_front();
                         return;
                     }
@@ -757,7 +759,6 @@ void Application::Start() {
 #endif
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (audio_send_queue_.size() >= MAX_AUDIO_PACKETS_IN_QUEUE) {
-                    ESP_LOGW(TAG, "Too many audio packets in queue, drop the oldest packet");
                     audio_send_queue_.pop_front();
                 }
                 audio_send_queue_.emplace_back(std::move(packet));
@@ -767,12 +768,9 @@ void Application::Start() {
     });
     audio_processor_->OnVadStateChange([this](bool speaking) {
         if (device_state_ == kDeviceStateListening) {
+            ESP_LOGD(TAG, "[Audio] VAD detected speaking: %s", speaking ? "True" : "False");
             Schedule([this, speaking]() {
-                if (speaking) {
-                    voice_detected_ = true;
-                } else {
-                    voice_detected_ = false;
-                }
+                voice_detected_ = speaking;
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             });
@@ -781,6 +779,7 @@ void Application::Start() {
 
     wake_word_->Initialize(codec);
     wake_word_->OnWakeWordDetected([this](const std::string &wake_word) {
+        ESP_LOGI(TAG, "[Wake] Wake-word detected: %s", wake_word.c_str());
         Schedule([this, &wake_word]() {
             if (!protocol_) {
                 return;
@@ -797,18 +796,12 @@ void Application::Start() {
                     }
                 }
 
-                ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
 #if CONFIG_USE_AFE_WAKE_WORD
                 AudioStreamPacket packet;
-                // Encode and send the wake word data to the server
                 while (wake_word_->GetWakeWordOpus(packet.payload)) {
                     protocol_->SendAudio(packet);
                 }
-                // Set the chat state to wake word detected
-              //  protocol_->SendWakeWordDetected(wake_word);
 #else
-                // Play the pop up sound to indicate the wake word is detected
-                // And wait 60ms to make sure the queue has been processed by audio task
                 ResetDecoder();
                 PlaySound(Lang::Sounds::P3_POPUP);
                 vTaskDelay(pdMS_TO_TICKS(60));
@@ -823,8 +816,6 @@ void Application::Start() {
     });
     wake_word_->StartDetection();
 
-    // Wait for the new version check to finish
-    // xEventGroupWaitBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT, pdTRUE, pdFALSE, portMAX_DELAY); // Disabled since check is skipped
     SetDeviceState(kDeviceStateIdle);
 
     has_server_time_ = ota.HasServerTime();
@@ -832,15 +823,13 @@ void Application::Start() {
         std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
         display->ShowNotification(message.c_str());
         display->SetChatMessage("system", "");
-        // Play the success sound to indicate the device is ready
         ResetDecoder();
         PlaySound(Lang::Sounds::P3_SUCCESS);
     }
 
-    // Print heap stats
+    ESP_LOGI(TAG, "Application service is READY. Heap available: %lu", (unsigned long)esp_get_free_heap_size());
     SystemInfo::PrintHeapStats();
 
-    // Enter the main event loop
     MainEventLoop();
 }
 
@@ -848,32 +837,29 @@ void Application::OnClockTimer() {
     clock_ticks_++;
 
     auto display = Board::GetInstance().GetDisplay();
-    // Battery Saver Logic: Reduce display refresh rate in Idle
     if (battery_save_mode_ && device_state_ == kDeviceStateIdle) {
-        // Slow refresh rate
         if (clock_ticks_ % 5 == 0) {
              display->UpdateStatusBar();
         }
 
-        // --- LOGIC TIẾT KIỆM PIN 3 GIAI ĐOẠN ---
+        // --- 3-STAGE BATTERY SAVER LOGIC ---
 
-        // Giai đoạn 1: Sau 60 giây - Giảm độ sáng
+        // Stage 1: Dim screen
         if (clock_ticks_ == BATTERY_SAVE_DIM_TIMEOUT) {
-            ESP_LOGI(TAG, "Battery save stage 1: Dimming screen");
-            Board::GetInstance().SetPowerSaveMode(true); // Thực thi Dimming (10% độ sáng)
+            ESP_LOGI(TAG, "[Power] Stage 1: Dimming screen (60s idle)");
+            Board::GetInstance().SetPowerSaveMode(true);
         }
 
-        // Giai đoạn 2: Sau 120 giây (2 phút) - Tắt hẳn màn hình
-        // Voice wakeup vẫn hoạt động vì CPU vẫn chạy
+        // Stage 2: Turn off display
         if (clock_ticks_ == BATTERY_SAVE_OFF_TIMEOUT) {
-            ESP_LOGI(TAG, "Battery save stage 2: Turning off display");
+            ESP_LOGI(TAG, "[Power] Stage 2: Backlight OFF (120s idle)");
             auto backlight = Board::GetInstance().GetBacklight();
             if (backlight) backlight->SetBrightness(0);
         }
 
-        // Giai đoạn 3: Sau 600 giây (10 phút) - Ngủ sâu
-        // Tắt mọi thứ, chỉ dậy được bằng nút bấm
+        // Stage 3: Deep Sleep
         if (clock_ticks_ >= BATTERY_SAVE_SLEEP_TIMEOUT) {
+            ESP_LOGW(TAG, "[Power] Stage 3: Entering Deep Sleep (600s idle)");
             EnterDeepSleep();
         }
 
@@ -881,18 +867,12 @@ void Application::OnClockTimer() {
     display->UpdateStatusBar();
         }
 
-    // Print the debug info every 10 seconds
     if (clock_ticks_ % 10 == 0) {
-        // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
-        // SystemInfo::PrintTaskList();
         SystemInfo::PrintHeapStats();
 
-        // If we have synchronized server time, set the status to clock "HH:MM" if the device is idle
         if (has_server_time_) {
             if (device_state_ == kDeviceStateIdle && !stt_only_mode_) {
-                // Do not overwrite status in STT mode
                 Schedule([this]() {
-                    // Set status to clock "HH:MM"
                     time_t now = time(NULL);
                     char time_str[64];
                     strftime(time_str, sizeof(time_str), "%H:%M  ", localtime(&now));
@@ -903,7 +883,6 @@ void Application::OnClockTimer() {
     }
 }
 
-// Add a async task to MainLoop
 void Application::Schedule(std::function<void()> callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -912,12 +891,9 @@ void Application::Schedule(std::function<void()> callback) {
     xEventGroupSetBits(event_group_, SCHEDULE_EVENT);
 }
 
-// The Main Event Loop controls the chat state and websocket connection
-// If other tasks need to access the websocket or chat state,
-// they should use Schedule to call this function
 void Application::MainEventLoop() {
-    // Raise the priority of the main event loop to avoid being interrupted by background tasks (which has priority 2)
     vTaskPrioritySet(NULL, 3);
+    ESP_LOGI(TAG, "Main Event Loop started (Priority 3)");
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, SCHEDULE_EVENT | SEND_AUDIO_EVENT, pdTRUE, pdFALSE,
@@ -945,9 +921,9 @@ void Application::MainEventLoop() {
     }
 }
 
-// The Audio Loop is used to input and output audio data
 void Application::AudioLoop() {
     auto codec = Board::GetInstance().GetAudioCodec();
+    ESP_LOGI(TAG, "Audio task loop started");
     while (true) {
         OnAudioInput();
         if (codec->output_enabled()) {
@@ -967,7 +943,6 @@ void Application::OnAudioOutput() {
 
     std::unique_lock<std::mutex> lock(mutex_);
     if (audio_decode_queue_.empty()) {
-        // Disable the output if there is no audio data for a long time
         if (device_state_ == kDeviceStateIdle) {
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_output_time_).count();
             if (duration > max_silence_seconds) {
@@ -982,7 +957,6 @@ void Application::OnAudioOutput() {
     lock.unlock();
     audio_decode_cv_.notify_all();
 
-    // Synchronize the sample rate and frame duration
     SetDecodeSampleRate(packet.sample_rate, packet.frame_duration);
 
     busy_decoding_audio_ = true;
@@ -996,7 +970,6 @@ void Application::OnAudioOutput() {
         if (!opus_decoder_->Decode(std::move(packet.payload), pcm)) {
             return;
         }
-        // Resample if the sample rate is different
         if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
             int target_size = output_resampler_.GetOutputSamples(pcm.size());
             std::vector<int16_t> resampled(target_size);
@@ -1101,7 +1074,6 @@ bool Application::ReadAudio(std::vector<int16_t> &data, int sample_rate, int sam
         }
     }
 
-    // Audio Debugging: Send raw audio data
     if (audio_debugger_) {
         audio_debugger_->Feed(data);
     }
@@ -1110,12 +1082,13 @@ bool Application::ReadAudio(std::vector<int16_t> &data, int sample_rate, int sam
 }
 
 void Application::AbortSpeaking(AbortReason reason) {
-    ESP_LOGI(TAG, "Abort speaking");
+    ESP_LOGI(TAG, "Abort speaking. Reason: %d", (int)reason);
     aborted_ = true;
     protocol_->SendAbortSpeaking(reason);
 }
 
 void Application::SetListeningMode(ListeningMode mode) {
+    ESP_LOGD(TAG, "Set Listening Mode: %d", (int)mode);
     listening_mode_ = mode;
     SetDeviceState(kDeviceStateListening);
 }
@@ -1125,16 +1098,15 @@ void Application::SetDeviceState(DeviceState state) {
         return;
     }
 
+    DeviceState old_state = device_state_;
     clock_ticks_ = 0;
     device_state_ = state;
-    ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
+    ESP_LOGI(TAG, "STATE CHANGE: %s -> %s", STATE_STRINGS[old_state], STATE_STRINGS[device_state_]);
 
-    // Khôi phục màn hình sáng rực ngay khi có bất kỳ hoạt động nào
     if (state != kDeviceStateIdle && state != kDeviceStateUnknown && state != kDeviceStateStarting) {
         Board::GetInstance().SetPowerSaveMode(false);
     }
 
-    // OPTIMIZATION: Only wait for background task if NOT in STT only mode.
     if (!stt_only_mode_) {
         background_task_->WaitForCompletion();
     }
@@ -1160,30 +1132,24 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
-            // Update the IoT states before sending the start listening command
 #if CONFIG_IOT_PROTOCOL_XIAOZHI
             UpdateIotStates();
 #endif
-
-            // Make sure the audio processor is running
             if (!audio_processor_->IsRunning()) {
-                ESP_LOGI(TAG, "STT Loop Debug: Starting audio_processor_ and sending StartListening protocol");
-                // Send the start listening command
+                ESP_LOGI(TAG, "[Audio] Opening audio channel & starting processor");
                 protocol_->SendStartListening(listening_mode_);
                 opus_encoder_->ResetState();
                 audio_processor_->Start();
                 wake_word_->StopDetection();
             } else {
-                ESP_LOGW(TAG, "STT Loop Debug: audio_processor_ was already running!");
+                ESP_LOGW(TAG, "[Audio] Processor was already running!");
             }
             break;
         case kDeviceStateSpeaking:
-            // Continuous STT Logic: If STT Only mode is on, skip Speaking state and jump back to Listening immediately
             if (stt_only_mode_) {
-                ESP_LOGI(TAG, "STT Loop Debug: Skipping speaking state due to stt_only_mode, jumping to LISTENING");
+                ESP_LOGI(TAG, "[STT-Only] Auto-jump SPEAKING -> LISTENING");
                 Schedule([this]() {
                     device_state_ = kDeviceStateListening;
-                    ESP_LOGI(TAG, "STATE: listening (Jump from Speaking)");
                     if (!audio_processor_->IsRunning()) {
                         protocol_->SendStartListening(listening_mode_);
                         opus_encoder_->ResetState();
@@ -1198,7 +1164,6 @@ void Application::SetDeviceState(DeviceState state) {
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_processor_->Stop();
-                // Only AFE wake word can be detected in speaking mode
 #if CONFIG_USE_AFE_WAKE_WORD
                 wake_word_->StartDetection();
 #else
@@ -1208,12 +1173,12 @@ void Application::SetDeviceState(DeviceState state) {
             ResetDecoder();
             break;
         default:
-            // Do nothing
             break;
     }
 }
 
 void Application::ResetDecoder() {
+    ESP_LOGD(TAG, "[Audio] Resetting decoder");
     std::lock_guard<std::mutex> lock(mutex_);
     opus_decoder_->ResetState();
     audio_decode_queue_.clear();
@@ -1228,12 +1193,13 @@ void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
         return;
     }
 
+    ESP_LOGI(TAG, "[Audio] Decoder SR: %d, Duration: %dms", sample_rate, frame_duration);
     opus_decoder_.reset();
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(sample_rate, 1, frame_duration);
 
     auto codec = Board::GetInstance().GetAudioCodec();
     if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
-        ESP_LOGI(TAG, "Resampling audio from %d to %d", opus_decoder_->sample_rate(), codec->output_sample_rate());
+        ESP_LOGI(TAG, "[Audio] Output resampling: %d to %d", opus_decoder_->sample_rate(), codec->output_sample_rate());
         output_resampler_.Configure(opus_decoder_->sample_rate(), codec->output_sample_rate());
     }
 }
@@ -1249,11 +1215,12 @@ void Application::UpdateIotStates() {
 }
 
 void Application::Reboot() {
-    ESP_LOGI(TAG, "Rebooting...");
+    ESP_LOGW(TAG, "!!! REBOOTING !!!");
     esp_restart();
 }
 
 void Application::WakeWordInvoke(const std::string &wake_word) {
+    ESP_LOGI(TAG, "[Wake] Invoke triggered");
     if (device_state_ == kDeviceStateIdle) {
         ToggleChatState();
     } else if (device_state_ == kDeviceStateSpeaking) {
@@ -1278,11 +1245,11 @@ bool Application::CanEnterSleepMode() {
         return false;
     }
 
-    // Now it is safe to enter sleep mode
     return true;
 }
 
 void Application::SendMcpMessage(const std::string &payload) {
+    ESP_LOGD(TAG, "[MCP] Outbound: %s", payload.c_str());
     Schedule([this, payload]() {
         if (protocol_) {
             protocol_->SendMcpMessage(payload);
@@ -1291,6 +1258,7 @@ void Application::SendMcpMessage(const std::string &payload) {
 }
 
 void Application::SetAecMode(AecMode mode) {
+    ESP_LOGI(TAG, "Setting AEC mode: %d", (int)mode);
     aec_mode_ = mode;
     Schedule([this]() {
         auto &board = Board::GetInstance();
@@ -1310,7 +1278,6 @@ void Application::SetAecMode(AecMode mode) {
                 break;
         }
 
-        // If the AEC mode is changed, close the audio channel
         if (protocol_ && protocol_->IsAudioChannelOpened()) {
             protocol_->CloseAudioChannel();
         }
@@ -1318,21 +1285,17 @@ void Application::SetAecMode(AecMode mode) {
 }
 
 void Application::SetSttOnlyMode(bool enable) {
+    ESP_LOGI(TAG, "Mode Change: STT Only %s", enable ? "On" : "Off");
     stt_only_mode_ = enable;
     auto display = Board::GetInstance().GetDisplay();
 
-    // Update UI signal
     display->SetSttMode(enable);
-
-    // Reset Listen Mode flag to default (Realtime/Running)
     listening_mode_ = kListeningModeRealtime;
 
     if (enable) {
         Schedule([this]() {
-            // DELAY trước khi bắt đầu để ổn định hệ thống và tránh tiếng ồn nút bấm
             vTaskDelay(pdMS_TO_TICKS(600));
 
-            // QUAN TRỌNG: Mở kênh TRƯỚC khi gửi WakeWord
             if (!protocol_->IsAudioChannelOpened()) {
                 SetDeviceState(kDeviceStateConnecting);
                 if (!protocol_->OpenAudioChannel()) {
@@ -1351,9 +1314,8 @@ void Application::SetSttOnlyMode(bool enable) {
 }
 
 void Application::SetBatterySaverMode(bool enable) {
+    ESP_LOGI(TAG, "Battery Saver: %s", enable ? "On" : "Off");
     battery_save_mode_ = enable;
-    ESP_LOGI(TAG, "Battery save mode: %d", enable);
-    // Apply immediate effect if enabling and already idle
     if (enable && device_state_ == kDeviceStateIdle) {
         Board::GetInstance().SetPowerSaveMode(true);
     } else {
@@ -1362,7 +1324,7 @@ void Application::SetBatterySaverMode(bool enable) {
 }
 
 void Application::EnterDeepSleep() {
-    ESP_LOGI(TAG, "Entering Deep Sleep (Wakeup: Button GPIO0)...");
+    ESP_LOGW(TAG, "!!! ENTERING DEEP SLEEP !!!");
     Board::GetInstance().GetDisplay()->SetStatus("Deep Sleep");
 
     vTaskDelay(pdMS_TO_TICKS(500));
